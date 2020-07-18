@@ -786,7 +786,7 @@ func (whisper *Whisper) Update(value float64, timestamp int) (err error) {
 		}
 	}()
 
-	diff := int(time.Now().Unix()) - timestamp
+	diff := int(Now().Unix()) - timestamp
 	if !(diff < whisper.maxRetention && diff >= 0) {
 		return fmt.Errorf("Timestamp not covered by any archives in this database")
 	}
@@ -1268,7 +1268,7 @@ func (whisper *Whisper) FetchByAggregation(fromTime, untilTime int, spec *MixAgg
   Check a TimeSeries has a points for a given time span from the file.
 */
 func (whisper *Whisper) CheckEmpty(fromTime, untilTime int) (exist bool, err error) {
-	now := int(time.Now().Unix()) // TODO: danger of 2030 something overflow
+	now := int(Now().Unix()) // TODO: danger of 2030 something overflow
 	if fromTime > untilTime {
 		return true, fmt.Errorf("Invalid time interval: from time '%d' is after until time '%d'", fromTime, untilTime)
 	}
