@@ -357,8 +357,8 @@ func TestReplayFile2(t *testing.T) {
 		}
 	}
 
-	t.Log("go", "run", "cmd/verify.go", "-v", "-now", fmt.Sprintf("%d", start.Unix()), "-ignore-buffer", fpath, fpath+".cwsp")
-	output, err := exec.Command("go", "run", "cmd/verify.go", "-now", fmt.Sprintf("%d", start.Unix()), "-ignore-buffer", fpath, fpath+".cwsp").CombinedOutput()
+	t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", start.Unix()), "-ignore-buffer", fpath, fpath+".cwsp")
+	output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", start.Unix()), "-ignore-buffer", fpath, fpath+".cwsp").CombinedOutput()
 	if err != nil {
 		t.Log(string(output))
 		t.Error(err)

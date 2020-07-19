@@ -588,8 +588,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// }
 
 			if *fullTest3 {
-				t.Log("go", "run", "cmd/verify.go", "-v", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp")
-				output, err := exec.Command("go", "run", "cmd/verify.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
+				t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp")
+				output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
 				if err != nil {
 					t.Log(string(output))
 					t.Error(err)
@@ -664,7 +664,7 @@ func TestCompressTo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := exec.Command("go", "run", "cmd/verify.go", fpath, fpath+".cwsp").CombinedOutput()
+	output, err := exec.Command("go", "run", "cmd/compare.go", fpath, fpath+".cwsp").CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s: %s", err, output)
 	}
