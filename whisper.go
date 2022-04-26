@@ -160,6 +160,8 @@ type Whisper struct {
 
 	// TODO: improve
 	NonFatalErrors []error
+
+	DiscardedPoints uint32
 }
 
 /*
@@ -890,10 +892,17 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 	sort.Stable(timeSeriesPointsNewestFirst{points})
 
 	now := int(Now().Unix()) // TODO: danger of 2030 something overflow
+	var oldDiscardedPoints uint32
 
 	var currentPoints []*TimeSeriesPoint
 	for i := 0; i < len(whisper.archives); i++ {
 		archive := whisper.archives[i]
+
+		// keep old discard counter
+		if whisper.compressed && archive.stats.discard.oldInterval > 0 {
+			oldDiscardedPoints += archive.stats.discard.oldInterval
+		}
+
 		if targetRetention != -1 && targetRetention != archive.MaxRetention() {
 			continue
 		}
@@ -929,7 +938,6 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 		if err != nil {
 			return
 		}
-
 		if len(points) == 0 { // nothing left to do
 			break
 		}
@@ -942,6 +950,15 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 
 		if err := whisper.extendIfNeeded(); err != nil {
 			return err
+		}
+
+		// update DiscardedPoints counter starting from last archive
+		// to not overflow uint32
+		for i := len(whisper.archives) - 1; i >= 0; i-- {
+			a := whisper.archives[i].stats.discard.oldInterval
+			if a > 0 {
+				whisper.DiscardedPoints += a - oldDiscardedPoints
+			}
 		}
 	}
 
