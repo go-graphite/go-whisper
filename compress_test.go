@@ -88,7 +88,7 @@ func TestBlockReadWrite1(t *testing.T) {
 			input = append(input, dataPoint{interval: next(1), value: 1})
 			input = append(input, dataPoint{interval: next(1), value: 1})
 			for i := 0; i < 200; i++ {
-				input = append(input, dataPoint{interval: next(rand.Intn(10)), value: rand.NormFloat64()})
+				input = append(input, dataPoint{interval: next(rand.Intn(10)), value: rand.NormFloat64()}) // skipcq: GSC-G404
 			}
 		}
 
@@ -415,7 +415,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: 0,
-					Time:  int(prevTime.Add(time.Duration(rand.Intn(4096)+1) * time.Second).Unix()),
+					Time:  int(prevTime.Add(time.Duration(rand.Intn(4096)+1) * time.Second).Unix()), // skipcq: GSC-G404
 				}
 			},
 		},
@@ -425,7 +425,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: rand.NormFloat64(),
-					Time:  int(prevTime.Add(time.Duration(rand.Intn(3600*24)+1) * time.Second).Unix()),
+					Time:  int(prevTime.Add(time.Duration(rand.Intn(3600*24)+1) * time.Second).Unix()), // skipcq: GSC-G404
 				}
 			},
 		},
@@ -435,8 +435,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// randLimit: func() int { return 300 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
-					Value: 2000.0 + float64(rand.Intn(1000)),
-					Time:  int(prevTime.Add(time.Duration(rand.Intn(60)) * time.Second).Unix()),
+					Value: 2000.0 + float64(rand.Intn(1000)),                                    // skipcq: GSC-G404
+					Time:  int(prevTime.Add(time.Duration(rand.Intn(60)) * time.Second).Unix()), // skipcq: GSC-G404
 				}
 			},
 		},
@@ -445,7 +445,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			fullTest:  func() bool { return true },
 			randLimit: func() int { return 300 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
-				return &TimeSeriesPoint{Value: 2000.0 + float64(rand.Intn(1000)), Time: int(prevTime.Add(time.Second * 60).Unix())}
+				return &TimeSeriesPoint{Value: 2000.0 + float64(rand.Intn(1000)), // skipcq: GSC-G404
+					Time: int(prevTime.Add(time.Second * 60).Unix())} // skipcq: GSC-G404
 			},
 		},
 
@@ -463,10 +464,10 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 		{
 			name:      "random_value2",
 			fullTest:  func() bool { return *fullTest3 },
-			randLimit: func() int { return rand.Intn(300) + (60 * 60 * 24) },
+			randLimit: func() int { return rand.Intn(300) + (60 * 60 * 24) }, // skipcq: GSC-G404
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
-					Value: 2000.0 + float64(rand.Intn(1000)),
+					Value: 2000.0 + float64(rand.Intn(1000)), // skipcq: GSC-G404
 					Time:  int(prevTime.Add(time.Second).Unix()),
 				}
 			},
@@ -480,12 +481,12 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 		},
 	}
 
-	os.MkdirAll("tmp", 0755)
+	os.MkdirAll("tmp", 0600)
 	inMemory := true
 	for i := range inputs {
 		input := inputs[i]
 		if input.randLimit == nil {
-			input.randLimit = func() int { return rand.Intn(300) }
+			input.randLimit = func() int { return rand.Intn(300) } // skipcq: GSC-G404
 		}
 
 		t.Run(input.name, func(t *testing.T) {
@@ -667,7 +668,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 }
 
 func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
-	fpath := fmt.Sprintf("tmp/test_single_retention_ooo.cwsp")
+	fpath := "tmp/test_single_retention_ooo.cwsp"
 	os.Remove(fpath)
 
 	rets := []*Retention{
@@ -739,7 +740,7 @@ func TestCompressTo(t *testing.T) {
 				// Value: float64(i),
 				// Value: 2000.0 + float64(rand.Intn(100000))/100.0,
 				// Value: rand.NormFloat64(),
-				Value: float64(rand.Intn(100000)),
+				Value: float64(rand.Intn(100000)), // skipcq: GSC-G404
 			})
 		}
 		whisper, err = OpenWithOptions(fpath, &Options{InMemory: true})
@@ -796,7 +797,7 @@ func TestRandomReadWrite(t *testing.T) {
 	var vals []float64
 	var entropy int
 	for i := 0; i < cwhisper.Retentions()[0].numberOfPoints; i++ {
-		gap := rand.Intn(10) + 1
+		gap := rand.Intn(10) + 1 // skipcq: GSC-G404
 		ptime = ptime.Add(time.Second * time.Duration(gap))
 		if ptime.After(start.Add(time.Duration(cwhisper.Retentions()[0].numberOfPoints) * time.Second)) {
 			break
@@ -1078,8 +1079,6 @@ func TestEstimatePointSize(t *testing.T) {
 	// 	size := estimatePointSize(ds, &Retention{secondsPerPoint: 10, numberOfPoints: 17280}, DefaultPointsPerBlock)
 	// 	fmt.Printf("%d: %f\n", i, size)
 	// }
-
-	return
 }
 
 func TestFillCompressedMix(t *testing.T) {
@@ -1123,7 +1122,7 @@ func TestFillCompressedMix(t *testing.T) {
 	nowNext := func() time.Time { now++; return Now() }
 	defer func() { Now = func() time.Time { return time.Now() } }()
 
-	limit = 300 + rand.Intn(100)
+	limit = 300 + rand.Intn(100) // skipcq: GSC-G404
 	for i, end := 0, 60*60*24*80; i < end; i++ {
 		points = append(points, &TimeSeriesPoint{
 			Time:  int(nowNext().Unix()),
@@ -1131,7 +1130,7 @@ func TestFillCompressedMix(t *testing.T) {
 		})
 
 		if len(points) > limit || i == end-1 {
-			limit = 300 + rand.Intn(100)
+			limit = 300 + rand.Intn(100) // skipcq: GSC-G404
 			if err := srcMix.UpdateMany(points); err != nil {
 				t.Error(err)
 			}
@@ -1166,7 +1165,7 @@ func TestFillCompressedMix(t *testing.T) {
 		panic(err)
 	}
 	points = []*TimeSeriesPoint{}
-	limit = 300 + rand.Intn(100)
+	limit = 300 + rand.Intn(100) // skipcq: GSC-G404
 	for i, end := 0, 60*60*24*2; i < end; i++ {
 		points = append(points, &TimeSeriesPoint{
 			Time:  int(nowNext().Unix()),
@@ -1174,7 +1173,7 @@ func TestFillCompressedMix(t *testing.T) {
 		})
 
 		if len(points) > limit || i == end-1 {
-			limit = 300 + rand.Intn(100)
+			limit = 300 + rand.Intn(100) // skipcq: GSC-G404
 			if err := dstMix.UpdateMany(points); err != nil {
 				t.Error(err)
 			}
