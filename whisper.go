@@ -955,12 +955,15 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 			return err
 		}
 
-		// update DiscardedPoints counter starting from last archive
-		// to not overflow uint32
-		for i := len(whisper.archives) - 1; i >= 0; i-- {
+		// update DiscardedPoints counter
+		for i := 0; i < len(whisper.archives); i++ {
 			a := whisper.archives[i].stats.discard.oldInterval
 			if a > 0 {
-				whisper.DiscardedPoints += a - oldDiscardedPoints
+				if a > oldDiscardedPoints {
+					whisper.DiscardedPoints += a - oldDiscardedPoints
+				} else {
+					whisper.DiscardedPoints += oldDiscardedPoints - a
+				}
 			}
 		}
 	}
