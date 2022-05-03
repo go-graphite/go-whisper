@@ -202,8 +202,8 @@ func TestCompressedWhisperReadWrite1(t *testing.T) {
 	if err := whisper.UpdateMany([]*TimeSeriesPoint{&outOfOrderDataPoint}); err != nil {
 		t.Error(err)
 	}
-	if got, want := whisper.DiscardedPoints, uint32(1); got != want {
-		t.Errorf("whisper.DiscardedPoints = %d; want %d", got, want)
+	if got, want := whisper.GetDiscardedPointsSinceOpen(), uint32(1); got != want {
+		t.Errorf("whisper.GetDiscardedPointsSinceOpen() = %d; want %d", got, want)
 	}
 
 	whisper.Close()
