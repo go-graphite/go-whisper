@@ -17,6 +17,8 @@ import (
 	"github.com/kr/pretty"
 )
 
+// to run a full test suite: go test -full-test3
+
 func init() {
 	log.SetFlags(log.Lshortfile)
 	rand.Seed(time.Now().UnixNano()) // skipcq: GSC-G404
