@@ -1305,8 +1305,11 @@ func (whisper *Whisper) fetchFromArchive(archive *archiveInfo, fromTime, untilTi
 			values[index] = dPoint.value
 		}
 		// cut values up to interval
-		values_len := (untilInterval - fromInterval) / step
-		return &TimeSeries{fromInterval, untilInterval, step, values[:values_len]}, nil
+		values_tgt := (untilInterval - fromInterval) / step
+		if len(values) > values_tgt {
+			values = values[:values_tgt]
+		}
+		return &TimeSeries{fromInterval, untilInterval, step, values}, nil
 	} else {
 		baseInterval := whisper.getBaseInterval(archive)
 
