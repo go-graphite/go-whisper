@@ -355,13 +355,14 @@ func TestCompressedWhisperReadWrite2(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			expectVals[i] = math.NaN()
 		}
-		expectVals[1] = input[0].Value
+
 		expect := &TimeSeries{
 			fromTime:  1544477925,
 			untilTime: 1544477945,
 			step:      5,
 			values:    expectVals,
 		}
+		// we don't allow writing to second archive
 		if ts, err := whisper.Fetch(nowTs-310, nowTs-290); err != nil {
 			t.Error(err)
 		} else if diff := cmp.Diff(ts, expect, cmp.AllowUnexported(TimeSeries{}), cmpopts.EquateNaNs()); diff != "" {

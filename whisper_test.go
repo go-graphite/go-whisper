@@ -594,12 +594,9 @@ func TestCreateUpdateManyOnly_old_points(t *testing.T) {
 func Test_extractPoints(t *testing.T) {
 	points := makeGoodPoints(100, 1, func(i int) float64 { return float64(i) })
 	now := int(time.Now().Unix())
-	currentPoints, remainingPoints := extractPoints(points, now, 50)
+	currentPoints := extractPoints(points, now, 50)
 	if length := len(currentPoints); length != 50 {
 		t.Fatalf("First: %v", length)
-	}
-	if length := len(remainingPoints); length != 50 {
-		t.Fatalf("Second: %v", length)
 	}
 }
 
@@ -608,12 +605,9 @@ func Test_extractPoints_only_old_points(t *testing.T) {
 	now := int(time.Now().Unix())
 	points := makeBadPoints(1, 100)
 
-	currentPoints, remainingPoints := extractPoints(points, now, 50)
+	currentPoints := extractPoints(points, now, 50)
 	if length := len(currentPoints); length != 0 {
 		t.Fatalf("First: %v", length)
-	}
-	if length := len(remainingPoints); length != 1 {
-		t.Fatalf("Second2: %v", length)
 	}
 }
 
@@ -1125,7 +1119,7 @@ func populateTestFile(w *Whisper, gapn int) error {
 			})
 		}
 
-		if err := w.UpdateManyForArchive(ps, r.MaxRetention()); err != nil {
+		if err := w.UpdateManyForArchive(ps); err != nil {
 			return err
 		}
 	}

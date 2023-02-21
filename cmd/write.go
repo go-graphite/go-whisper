@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -16,6 +17,7 @@ import (
 )
 
 func main() {
+	// Deprecated flag
 	ignoreNow := flag.Bool("ignore-now", false, "ignore now on write (always write to the base/first archive)")
 	schema := flag.String("schema", "", "create a new whisper file using the schema if file not found: 1s2d:1m:31d:1h:10y;avg")
 	xFilesFactor := flag.Float64("xfiles-factor", 0.0, "xfiles factor used for creating new whisper file")

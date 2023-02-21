@@ -120,7 +120,8 @@ type Options struct {
 	MixAvgCompressedPointSizes map[int][]float32
 
 	SIMV bool // single interval multiple values
-
+	// Deprecated, remove in next versions
+	// currently we write to the first archive all the time, regardless this flag
 	IgnoreNowOnWrite bool
 }
 
@@ -870,7 +871,7 @@ func reversePoints(points []*TimeSeriesPoint) {
 var Now = time.Now
 
 func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) (err error) {
-	return whisper.UpdateManyForArchive(points, -1)
+	return whisper.UpdateManyForArchive(points)
 }
 
 /*
@@ -892,11 +893,11 @@ func (whisper *Whisper) GetDiscardedPointsSinceOpen() uint32 {
 	return 0
 }
 
-// Note: for compressed format, extensions is triggered after update is
-// done, so updates of the same data set being done in one
 // UpdateManyForArchive call would have different result in file than in
 // many UpdateManyForArchive calls.
-func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRetention int) (err error) {
+// Note: for compressed format, extensions is triggered after update is
+// done, so updates of the same data set being done in one
+func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint) (err error) {
 	// recover panics and return as error
 	defer func() {
 		if e := recover(); e != nil {
@@ -907,63 +908,32 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 	// sort the points, newest first
 	reversePoints(points)
 	sort.Stable(timeSeriesPointsNewestFirst{points})
-
+	// we write only in first archive all the time
+	archive := whisper.archives[0]
 	now := int(Now().Unix()) // TODO: danger of 2030 something overflow
-
-	var currentPoints []*TimeSeriesPoint
-	for i := 0; i < len(whisper.archives); i++ {
-		archive := whisper.archives[i]
-
-		if targetRetention != -1 && targetRetention != archive.MaxRetention() {
-			continue
-		}
-
-		if whisper.opts.IgnoreNowOnWrite {
-			currentPoints = points
-			points = []*TimeSeriesPoint{}
-		} else {
-			currentPoints, points = extractPoints(points, now, archive.MaxRetention())
-		}
-
-		if len(currentPoints) == 0 {
-			continue
-		}
-
-		// reverse currentPoints
-		reversePoints(currentPoints)
-		if whisper.compressed {
-			// Backfilling lower archives is not allowed/supported for mix
-			// aggreation policy with the current api, a new api/parameter is
-			// needed to specify which aggregaton target to backfill.
-			if whisper.aggregationMethod == Mix && i > 0 {
-				break
-			}
-
-			// TODO: add a new options to update data points in smaller chunks if
-			// it exceeeds certain size, so extension could be triggered
-			// properly: ChunkUpdateSize
-			err = whisper.archiveUpdateManyCompressed(archive, currentPoints)
-		} else {
-			err = whisper.archiveUpdateMany(archive, currentPoints)
-		}
-		if err != nil {
-			return
-		}
-		if len(points) == 0 { // nothing left to do
-			break
-		}
+	points = extractPoints(points, now, archive.MaxRetention())
+	if len(points) == 0 {
+		return
 	}
 
+	// reverse currentPoints
+	reversePoints(points)
 	if whisper.compressed {
+		// TODO: add a new options to update data points in smaller chunks if
+		// it exceeds certain size, so extension could be triggered
+		// properly: ChunkUpdateSize
+		if err := whisper.archiveUpdateManyCompressed(archive, points); err != nil {
+			return err
+		}
 		if err := whisper.WriteHeaderCompressed(); err != nil {
 			return err
 		}
-
 		if err := whisper.extendIfNeeded(); err != nil {
 			return err
 		}
+	} else {
+		err = whisper.archiveUpdateMany(archive, points)
 	}
-
 	return
 }
 
@@ -1031,18 +1001,18 @@ func (whisper *Whisper) archiveUpdateManyDataPoints(archive *archiveInfo, aligne
 	return nil
 }
 
-func extractPoints(points []*TimeSeriesPoint, now, maxRetention int) (currentPoints []*TimeSeriesPoint, remainingPoints []*TimeSeriesPoint) {
+func extractPoints(points []*TimeSeriesPoint, now, maxRetention int) (currentPoints []*TimeSeriesPoint) {
 	maxAge := now - maxRetention
 	for i, point := range points {
 		if point.Time < maxAge {
 			if i > 0 {
-				return points[:i-1], points[i-1:]
+				return points[:i-1]
 			} else {
-				return []*TimeSeriesPoint{}, points
+				return []*TimeSeriesPoint{}
 			}
 		}
 	}
-	return points, remainingPoints
+	return points
 }
 
 func alignPoints(archive *archiveInfo, points []*TimeSeriesPoint) []dataPoint {
@@ -1290,7 +1260,7 @@ func (whisper *Whisper) fetchFromArchive(archive *archiveInfo, fromTime, untilTi
 
 		irange := untilInterval - fromInterval
 		values := make([]float64, irange/archive.secondsPerPoint)
-		
+
 		for i := range values {
 			values[i] = math.NaN()
 		}
