@@ -120,7 +120,7 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 		i += FreeCompressedArchiveInfoSize - mixSpecSize
 
 		if FreeCompressedArchiveInfoSize < mixSpecSize {
-			panic("out of FreeCompressedArchiveInfoSize") // a panic that should never happens
+			panic("out of FreeCompressedArchiveInfoSize") // a panic that should never happen
 		}
 	}
 
@@ -137,7 +137,11 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 			i += copy(b[i:], archive.buffer)
 		}
 	}
-
+	for _, oooArchive := range whisper.oooArchives {
+		i += packInt(b, oooArchive.offset, i)
+		i += packInt(b, oooArchive.secondsPerPoint, i)
+		i += packInt(b, oooArchive.numberOfPoints, i)
+	}
 	whisper.crc32 = crc32(b, 0)
 	packInt(b, int(whisper.crc32), whisper.crc32Offset())
 
@@ -152,6 +156,7 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 }
 
 func (whisper *Whisper) readHeaderCompressed() (err error) {
+	// TODO check if we can do everything in one read
 	if _, err := whisper.file.Seek(int64(len(compressedMagicString)), 0); err != nil {
 		return err
 	}
@@ -290,7 +295,16 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 			return fmt.Errorf("unable to read archive %d buffer: readed = %d want = %d", i, readed, arc.bufferSize)
 		}
 	}
-
+	// reading oooArchives info, works only for single archive metrics
+	if whisper.compVersion >= CompVersionLongOOOSingleArchive && len(whisper.archives) == 1 {
+		b = make([]byte, ArchiveInfoSize)
+		readed, err = whisper.file.Read(b)
+		if err != nil || readed != ArchiveInfoSize {
+			err = fmt.Errorf("unable to read ooo archive metadata: %s", err)
+			return
+		}
+		whisper.oooArchives = append(whisper.oooArchives, unpackArchiveInfo(b))
+	}
 	return nil
 }
 
@@ -473,6 +487,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 
 	baseIntervalsPerUnit, currentUnit, minInterval := archive.getBufferInfo()
 	bufferUnitPointsCount := whisper.bufferUnitPointsCount(archive)
+	var oooDataPoints []dataPoint
 	for aindex := 0; aindex < len(alignedPoints); {
 		dp := alignedPoints[aindex]
 		dpBaseInterval := archive.AggregateInterval(dp.interval)
@@ -482,6 +497,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 		if minInterval != 0 && dpBaseInterval < minInterval { // TODO: check against cblock pn1.interval?
 			archive.stats.discard.oldInterval++
 			aindex++
+			oooDataPoints = append(oooDataPoints, dp)
 			continue
 		}
 
@@ -558,6 +574,13 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 				return err
 			}
 		}
+	}
+	if len(oooDataPoints) > 0 && len(whisper.oooArchives) != 0 && whisper.oooArchives[0].SecondsPerPoint() == archive.SecondsPerPoint() {
+		// updating OOO archive, no propagation because OOO archive exits only for single archive
+		if err := whisper.archiveUpdateManyDataPoints(whisper.oooArchives[0], oooDataPoints, false); err != nil {
+			return err
+		}
+		archive.stats.discard.oldInterval -= uint32(len(oooDataPoints))
 	}
 
 	return nil

@@ -772,7 +772,6 @@ func TestCompressedWhisperBufferOOOWrite(t *testing.T) {
 			points = append(points, p)
 		}
 	}
-
 	if diff := cmp.Diff(points, []TimeSeriesPoint{
 		{Time: 1544476080, Value: 666}, {Time: 1544476140, Value: 666}, {Time: 1544476200, Value: 666},
 		{Time: 1544476260, Value: 666}, {Time: 1544476320, Value: 666}, {Time: 1544477340, Value: 666},
@@ -842,7 +841,7 @@ func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
 	}
 	cwhisper.UpdateMany(points)
 
-	// buffer us flushed, can't accept OOO data not within the buffer
+	// buffer is flushed, can accept OOO data in OOO archive only
 
 	cwhisper.UpdateMany([]*TimeSeriesPoint{
 		{Value: 1000, Time: now + 1},
@@ -854,7 +853,7 @@ func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
 	}
 	if got, want := data.Points(), []TimeSeriesPoint{
 		{Time: now + 0, Value: 1},
-		{Time: now + 1, Value: 0},
+		{Time: now + 1, Value: 1000},
 		{Time: now + 2, Value: 1},
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("data.Points() = %v; want %v", got, want)
