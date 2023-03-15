@@ -94,7 +94,6 @@ func (whisper *Whisper) Dump(all, showDecompressionInfo bool) {
 		}
 		fmt.Printf("archives.%d.retention:      %s%s\n", i, arc.Retention, agg)
 	}
-
 	for i, arc := range whisper.archives {
 		fmt.Printf("\nArchive %d info:\n", i)
 		if whisper.compressed {
@@ -103,11 +102,18 @@ func (whisper *Whisper) Dump(all, showDecompressionInfo bool) {
 			arc.dumpInfoStandard()
 		}
 	}
+	if len(whisper.oooArchives) > 0 {
+		fmt.Printf("\nOOO archive %d info:\n", 0)
+		whisper.oooArchives[0].dumpInfoStandard()
+	}
 
 	if !all {
 		return
 	}
-
+	if len(whisper.oooArchives) > 0 {
+		fmt.Printf("\nOOO archive %d data:\n", 0)
+		whisper.dumpDataPointsStandard(whisper.oooArchives[0])
+	}
 	for i, arc := range whisper.archives {
 		fmt.Printf("\nArchive %d data:\n", i)
 		if whisper.compressed {

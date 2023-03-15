@@ -772,7 +772,6 @@ func TestCompressedWhisperBufferOOOWrite(t *testing.T) {
 			points = append(points, p)
 		}
 	}
-
 	if diff := cmp.Diff(points, []TimeSeriesPoint{
 		{Time: 1544476080, Value: 666}, {Time: 1544476140, Value: 666}, {Time: 1544476200, Value: 666},
 		{Time: 1544476260, Value: 666}, {Time: 1544476320, Value: 666}, {Time: 1544477340, Value: 666},
@@ -842,7 +841,7 @@ func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
 	}
 	cwhisper.UpdateMany(points)
 
-	// buffer us flushed, can't accept OOO data not within the buffer
+	// buffer is flushed, can accept OOO data in OOO archive only
 
 	cwhisper.UpdateMany([]*TimeSeriesPoint{
 		{Value: 1000, Time: now + 1},
@@ -854,7 +853,7 @@ func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
 	}
 	if got, want := data.Points(), []TimeSeriesPoint{
 		{Time: now + 0, Value: 1},
-		{Time: now + 1, Value: 0},
+		{Time: now + 1, Value: 1000},
 		{Time: now + 2, Value: 1},
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("data.Points() = %v; want %v", got, want)
@@ -926,6 +925,63 @@ func TestCompressTo(t *testing.T) {
 	}
 }
 
+func TestCompressToSingleArchive(t *testing.T) {
+	fpath := "compress_to_single_archive.wsp"
+	os.Remove(fpath)
+
+	whisper, err := CreateWithOptions(
+		fpath,
+		[]*Retention{
+			{secondsPerPoint: 1, numberOfPoints: 172800}, // 1s:2d
+		},
+		Average,
+		0,
+		&Options{Compressed: false, PointsPerBlock: 7200, InMemory: true},
+	)
+	if err != nil {
+		panic(err)
+	}
+	whisper.Close()
+	archive := whisper.archives[0]
+	var ps []*TimeSeriesPoint
+	for i := 0; i < archive.numberOfPoints; i++ {
+		start := Now().Add(time.Second * time.Duration(archive.secondsPerPoint*i) * -1)
+		ps = append(ps, &TimeSeriesPoint{
+			// Time: int(start.Add(time.Duration(i) * time.Second).Unix()),
+			Time: int(start.Unix()),
+			// Value: float64(i),
+			// Value: 2000.0 + float64(rand.Intn(100000))/100.0, // skipcq: GSC-G404
+			// Value: rand.NormFloat64(), // skipcq: GSC-G404
+			Value: float64(rand.Intn(100000)), // skipcq: GSC-G404
+		})
+	}
+	whisper, err = OpenWithOptions(fpath, &Options{InMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := whisper.UpdateMany(ps); err != nil {
+		t.Fatal(err)
+	}
+	if err := whisper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	whisper.file.(*memFile).dumpOnDisk(fpath)
+
+	whisper, err = OpenWithOptions(fpath, &Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(fpath + ".cwsp")
+	if err := whisper.CompressTo(fpath + ".cwsp"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log("go", "run", "cmd/compare.go", "-v", fpath, fpath+".cwsp")
+	output, err := Compare(fpath, fpath+".cwsp", 0, false, "", false, false, 2)
+	if err != nil {
+		t.Fatalf("%s: %s", err, output)
+	}
+}
 func TestRandomReadWrite(t *testing.T) {
 	// os.Remove("test_random_read_write.wsp")
 	fileTs := time.Now().Unix()
