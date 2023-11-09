@@ -43,6 +43,10 @@ const (
 	classicHeaderAggregationOffset = 0
 	classicHeaderXFFOffset         = IntSize * 2
 )
+const (
+	BufferUnitPointsCountSingleArchive = 60
+	CompVersion                        = 2 // with added archive buffer for single archive
+)
 
 // Note: 4 bytes long in Whisper Header, 1 byte long in Archive Header
 type AggregationMethod int
@@ -417,7 +421,7 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	whisper.opts = options
 
 	whisper.compressed = options.Compressed
-	whisper.compVersion = 1
+	whisper.compVersion = CompVersion
 	whisper.pointsPerBlock = options.PointsPerBlock
 	whisper.avgCompressedPointSize = options.PointSize
 	for _, retention := range retentions {
@@ -482,11 +486,6 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 
 			archive.offset = offset
 			offset += archive.blockSize * archive.blockCount
-
-			if i > 0 {
-				size := archive.secondsPerPoint / whisper.archives[i-1].secondsPerPoint * PointSize * 2
-				whisper.archives[i-1].buffer = make([]byte, size)
-			}
 
 			continue
 		}
@@ -712,9 +711,15 @@ func (whisper *Whisper) initMetaInfo() {
 		prevArc := whisper.archives[i-1]
 		prevArc.next = arc
 
-		if whisper.aggregationMethod != Mix && whisper.compVersion == 1 {
+		if whisper.aggregationMethod != Mix && (whisper.compVersion == 1 || whisper.compVersion == 2) {
 			prevArc.bufferSize = arc.secondsPerPoint / prevArc.secondsPerPoint * PointSize * bufferCount
+			prevArc.buffer = make([]byte, prevArc.bufferSize)
 		}
+	}
+	// for OOO write for short time
+	if len(whisper.archives) == 1 && whisper.compVersion == 2 {
+		whisper.archives[0].bufferSize = 60 * PointSize * bufferCount
+		whisper.archives[0].buffer = make([]byte, whisper.archives[0].bufferSize)
 	}
 }
 
@@ -791,8 +796,8 @@ func (whisper *Whisper) bufferSize() int {
 		return 0
 	}
 	var bufSize int
-	for i, arc := range whisper.archives[1:] {
-		bufSize += arc.secondsPerPoint / whisper.archives[i].secondsPerPoint * PointSize * bufferCount
+	for _, arc := range whisper.archives {
+		bufSize += whisper.bufferUnitPointsCount(arc) * PointSize * bufferCount
 	}
 	return bufSize
 }
@@ -977,6 +982,17 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 func (whisper *Whisper) archiveUpdateMany(archive *archiveInfo, points []*TimeSeriesPoint) error {
 	alignedPoints := alignPoints(archive, points)
 	return whisper.archiveUpdateManyDataPoints(archive, alignedPoints, true)
+}
+func (whisper *Whisper) bufferUnitPointsCount(archive *archiveInfo) int {
+	for i, arc := range whisper.archives {
+		if i != 0 && whisper.archives[i-1].Retention == archive.Retention {
+			return arc.secondsPerPoint / whisper.archives[i-1].secondsPerPoint
+		}
+	}
+	if len(whisper.archives) == 1 {
+		return BufferUnitPointsCountSingleArchive
+	}
+	return 0
 }
 
 // skipcq: RVV-A0005
@@ -1531,7 +1547,8 @@ func (archive *archiveInfo) Interval(time int) int {
 }
 
 func (archive *archiveInfo) AggregateInterval(time int) int {
-	return time - mod(time, archive.next.secondsPerPoint)
+	count := archive.whisper.bufferUnitPointsCount(archive)
+	return time - mod(time, count*archive.secondsPerPoint) // supposed archive.next.secondsPerPoint
 }
 
 type TimeSeries struct {
