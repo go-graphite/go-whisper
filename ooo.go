@@ -97,15 +97,21 @@ func (whisper *Whisper) oooSidecarPath() string { return whisper.file.Name() + o
 //
 // Detection is a stat rather than a flag in the compressed header: it keeps the
 // .wsp bytes untouched, and a negative dentry makes the repeated miss cheap.
-func (whisper *Whisper) detectOOO() {
+func (whisper *Whisper) detectOOO() error {
 	if !whisper.compressed || whisper.opts == nil || whisper.opts.InMemory {
-		return
+		return nil
 	}
-	if _, err := os.Stat(whisper.oooSidecarPath()); err == nil {
-		whisper.oooPath = whisper.oooSidecarPath()
-	} else {
+
+	path := whisper.oooSidecarPath()
+	if _, err := os.Stat(path); err == nil {
+		whisper.oooPath = path
+	} else if os.IsNotExist(err) {
 		whisper.oooPath = ""
+	} else {
+		return fmt.Errorf("detect out-of-order sidecar %s: %w", path, err)
 	}
+
+	return nil
 }
 
 // discardOrphanedOOO removes a sidecar left behind by a previous incarnation of
@@ -319,7 +325,9 @@ func (whisper *Whisper) mergeOutOfOrderValues(archiveIndex, fromTime, untilTime 
 		return nil
 	}
 	if whisper.oooPath == "" {
-		whisper.detectOOO()
+		if err := whisper.detectOOO(); err != nil {
+			return err
+		}
 		if whisper.oooPath == "" {
 			return nil
 		}
@@ -386,6 +394,10 @@ func (whisper *Whisper) MergeOutOfOrder() error {
 		return fmt.Errorf("merge out-of-order points: %w", err)
 	}
 	if sidecar == nil {
+		if whisper.oooBroken {
+			whisper.oooPath = whisper.oooSidecarPath()
+			return fmt.Errorf("merge out-of-order points: %w", errOOOIncompatible)
+		}
 		// nothing usable to merge
 		whisper.oooPath = ""
 		whisper.OutOfOrderPoints = 0

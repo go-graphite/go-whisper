@@ -879,6 +879,9 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 	oooPoints, oooBroken := whisper.OutOfOrderPoints, whisper.oooBroken
 
 	nwhisper, err = OpenWithOptions(filename, whisper.opts)
+	if err != nil {
+		return fmt.Errorf("%s/reopen: %w", op, err)
+	}
 	*whisper = *nwhisper
 	whisper.OutOfOrderPoints, whisper.oooBroken = oooPoints, oooBroken
 	if oooBroken {

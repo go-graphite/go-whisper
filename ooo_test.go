@@ -253,6 +253,20 @@ func TestOutOfOrderReaderDiscoversSidecarCreatedAfterOpen(t *testing.T) {
 	assertValues(t, ts, []float64{1, 7, 2, math.NaN(), 3, math.NaN()})
 }
 
+func TestOutOfOrderReaderReportsSidecarStatError(t *testing.T) {
+	reader, path, base := newSingleRetentionOOO(t, false)
+	defer reader.Close()
+
+	sidecarPath := path + oooSuffix
+	if err := os.Symlink(sidecarPath, sidecarPath); err != nil {
+		t.Fatalf("create looping sidecar symlink: %s", err)
+	}
+
+	if _, err := reader.Fetch(base-1, base+5); err == nil {
+		t.Fatal("fetch succeeded despite sidecar stat error")
+	}
+}
+
 // Backfill far enough into the past that UpdateMany routes the point to a
 // coarser archive; it must be diverted against that archive, not re-routed by
 // age into the base archive of the sidecar.
@@ -726,6 +740,43 @@ func TestOutOfOrderIncompatibleSidecarDoesNotFailWrites(t *testing.T) {
 		t.Fatalf("fetch: %s", err)
 	}
 	assertValues(t, ts, []float64{1, math.NaN(), 2, math.NaN(), 3, math.NaN(), math.NaN(), math.NaN(), math.NaN(), math.NaN(), 4, math.NaN()})
+}
+
+func TestOutOfOrderMergeRejectsIncompatibleSidecar(t *testing.T) {
+	cwhisper, path, base := newSingleRetentionOOO(t, true)
+	defer cwhisper.Close()
+
+	if err := cwhisper.UpdateMany([]*TimeSeriesPoint{{Time: base + 1, Value: 7}}); err != nil {
+		t.Fatalf("late update: %s", err)
+	}
+	if err := cwhisper.closeOOO(); err != nil {
+		t.Fatalf("close sidecar: %s", err)
+	}
+
+	sidecarPath := path + oooSuffix
+	if err := os.Remove(sidecarPath); err != nil {
+		t.Fatalf("remove sidecar: %s", err)
+	}
+	bad, err := Create(sidecarPath, []*Retention{{secondsPerPoint: 60, numberOfPoints: 100}}, Sum, 0)
+	if err != nil {
+		t.Fatalf("create incompatible sidecar: %s", err)
+	}
+	if err := bad.Close(); err != nil {
+		t.Fatalf("close incompatible sidecar: %s", err)
+	}
+
+	if err := cwhisper.MergeOutOfOrder(); !errors.Is(err, errOOOIncompatible) {
+		t.Fatalf("merge error = %v; want %v", err, errOOOIncompatible)
+	}
+	if got := cwhisper.OutOfOrderPoints; got != 1 {
+		t.Errorf("OutOfOrderPoints = %d; want 1 after failed merge", got)
+	}
+	if got := cwhisper.OutOfOrderPath(); got != sidecarPath {
+		t.Errorf("OutOfOrderPath() = %q; want %q after failed merge", got, sidecarPath)
+	}
+	if _, err := os.Stat(sidecarPath); err != nil {
+		t.Errorf("sidecar missing after failed merge: %s", err)
+	}
 }
 
 // Callers are told to merge once enough has piled up, so the counter has to go

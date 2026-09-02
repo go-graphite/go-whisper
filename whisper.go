@@ -675,7 +675,9 @@ func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error
 		if err := whisper.readHeaderCompressed(); err != nil {
 			return whisper, err
 		}
-		whisper.detectOOO()
+		if err := whisper.detectOOO(); err != nil {
+			return whisper, err
+		}
 		return whisper, nil
 	}
 
