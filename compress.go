@@ -856,7 +856,7 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 		nwhisper.archives[i].buffer = archive.buffer
 	}
 	if err := nwhisper.WriteHeaderCompressed(); err != nil {
-		return fmt.Errorf("%s: failed to writer header: %s", op, err)
+		return fmt.Errorf("%s: failed to write header: %w", op, err)
 	}
 
 	if err := whisper.Close(); err != nil {
