@@ -123,6 +123,14 @@ type Options struct {
 	SIMV bool // single interval multiple values
 
 	IgnoreNowOnWrite bool
+
+	// OutOfOrder diverts points that the compressed format cannot accept
+	// (those not newer than the current block watermark) into a sidecar file
+	// instead of discarding them. Compressed format only; see ooo.go.
+	//
+	// This flag gates writing only. A sidecar that already exists is always
+	// merged on read, so turning the flag back off does not hide data.
+	OutOfOrder bool
 }
 
 type MixAggregationSpec struct {
@@ -169,6 +177,20 @@ type Whisper struct {
 	NonFatalErrors []error
 
 	discardedPointsAtOpen uint32
+
+	// oooPath is the out-of-order sidecar's path when one exists, otherwise
+	// empty. OutOfOrderPoints counts the points diverted into it since the
+	// last merge (or since this handle was opened). See ooo.go.
+	//
+	// oooBroken latches once a sidecar has been found unusable, so the
+	// mismatch is reported once rather than on every read and write.
+	//
+	// oooFile caches the open sidecar so reads and writes do not reopen it.
+	// It belongs to this handle; use oooSidecar/closeOOO, never Close it.
+	oooPath          string
+	oooBroken        bool
+	oooFile          *Whisper
+	OutOfOrderPoints uint32
 }
 
 /*
@@ -528,6 +550,8 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 		}
 	}
 
+	whisper.discardOrphanedOOO()
+
 	return whisper, nil
 }
 
@@ -648,7 +672,11 @@ func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error
 
 	// read the metadata
 	if whisper.compressed {
-		return whisper, whisper.readHeaderCompressed()
+		if err := whisper.readHeaderCompressed(); err != nil {
+			return whisper, err
+		}
+		whisper.detectOOO()
+		return whisper, nil
 	}
 
 	b = make([]byte, MetadataSize)
@@ -745,7 +773,14 @@ func (whisper *Whisper) crc32Offset() int {
 Close the whisper file
 */
 func (whisper *Whisper) Close() error {
-	return whisper.file.Close()
+	// the sidecar's error is reported only if the main file closes cleanly:
+	// failing to write back the metric itself is the more important one
+	oooErr := whisper.closeOOO()
+	if err := whisper.file.Close(); err != nil {
+		return err
+	}
+
+	return oooErr
 }
 
 /*
@@ -923,6 +958,10 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 
 	now := int(Now().Unix()) // TODO: danger of 2030 something overflow
 
+	// points the compressed encoder rejects as too old, collected so they can
+	// be diverted to the out-of-order sidecar below instead of being lost
+	var dropped []oooPoint
+
 	var currentPoints []*TimeSeriesPoint
 	for i := 0; i < len(whisper.archives); i++ {
 		archive := whisper.archives[i]
@@ -949,7 +988,9 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 			// TODO: add a new options to update data points in smaller chunks if
 			// it exceeeds certain size, so extension could be triggered
 			// properly: ChunkUpdateSize
-			err = whisper.archiveUpdateManyCompressed(archive, currentPoints)
+			var archiveDropped []oooPoint
+			archiveDropped, err = whisper.archiveUpdateManyCompressed(archive, currentPoints)
+			dropped = append(dropped, archiveDropped...)
 		} else {
 			err = whisper.archiveUpdateMany(archive, currentPoints)
 		}
@@ -964,6 +1005,21 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 	if whisper.compressed {
 		if err := whisper.WriteHeaderCompressed(); err != nil {
 			return err
+		}
+
+		// Divert before extendIfNeeded: extension replaces *whisper wholesale,
+		// and the sidecar bookkeeping has to survive that.
+		//
+		// An unusable sidecar is not an error (the points are dropped as they
+		// would be without the option), so anything returned here is real I/O
+		// trouble. The main file's write has already landed by this point, so a
+		// caller that retries the batch rewrites points it has already stored;
+		// that is idempotent for the main file and deduped per slot in the
+		// sidecar, so a retry is safe.
+		if whisper.oooEnabled() {
+			if err := whisper.divertOutOfOrder(dropped); err != nil {
+				return err
+			}
 		}
 
 		if err := whisper.extendIfNeeded(); err != nil {
@@ -1311,6 +1367,15 @@ func (whisper *Whisper) fetchFromArchive(archive *archiveInfo, fromTime, untilTi
 			}
 			values[index] = dPoint.value
 		}
+
+		// overlay any points that were too old for the compressed encoder and
+		// got diverted to the sidecar
+		if idx := whisper.archiveIndexOf(archive); idx >= 0 {
+			if err := whisper.mergeOutOfOrderValues(idx, fromTime, untilTime, values); err != nil {
+				return nil, err
+			}
+		}
+
 		return &TimeSeries{fromInterval, untilInterval, step, values}, nil
 	} else {
 		baseInterval := whisper.getBaseInterval(archive)
@@ -1789,6 +1854,14 @@ func (whisper *Whisper) UpdateConfig(rets Retentions, aggr AggregationMethod, xf
 
 	updateRets := !rets.Equal(NewRetentionsNoPointer(whisper.Retentions()))
 	updateAggrXff := whisper.aggregationMethod != aggr || whisper.xFilesFactor != xff
+
+	// A sidecar uses the current grid, aggregation and xFilesFactor. Fold it in
+	// before changing any of them so later writes cannot use stale semantics.
+	if whisper.compressed && whisper.aggregationMethod != Mix && (updateRets || updateAggrXff) {
+		if err := whisper.MergeOutOfOrder(); err != nil {
+			return err
+		}
+	}
 
 	if updateRets {
 		newWhisper, err := CreateWithOptions(newFilename, rets, aggr, xff, options)
