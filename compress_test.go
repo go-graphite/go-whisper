@@ -638,7 +638,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// 	if err != nil {
 			// 		panic(err)
 			// 	}
-			// 	if err := ioutil.WriteFile("test3.json", data, 0644); err != nil {
+			// 	if err := os.WriteFile("test3.json", data, 0644); err != nil {
 			// 		panic(err)
 			// 	}
 			// }

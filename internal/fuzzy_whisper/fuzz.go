@@ -1,7 +1,7 @@
 package fuzzy_whisper
 
 import (
-	"io/ioutil"
+	"os"
 	"time"
 
 	whisper "github.com/go-graphite/go-whisper"
@@ -11,7 +11,7 @@ import (
 //
 // skipcq: RVV-B0012
 func Fuzz(data []byte) int {
-	f, err := ioutil.TempFile("cwhisper", "*")
+	f, err := os.CreateTemp("cwhisper", "*")
 	if err != nil {
 		panic("failed to create tempfile: " + err.Error())
 	}
