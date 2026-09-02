@@ -315,6 +315,16 @@ func (whisper *Whisper) divertOutOfOrder(dropped []oooPoint) error {
 // window that already holds an aggregate keeps the stale one until
 // MergeOutOfOrder recomputes it - the encoded slot cannot be rewritten in place.
 func (whisper *Whisper) mergeOutOfOrderValues(archiveIndex, fromTime, untilTime int, values []float64) error {
+	if whisper.oooBroken {
+		return nil
+	}
+	if whisper.oooPath == "" {
+		whisper.detectOOO()
+		if whisper.oooPath == "" {
+			return nil
+		}
+	}
+
 	sidecar, err := whisper.oooSidecar(false)
 	if err != nil {
 		return err
