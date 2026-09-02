@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"os/signal"
@@ -74,7 +73,7 @@ func main() {
 	var exitc = make(chan struct{})
 	var shutdownc = make(chan os.Signal, 1)
 
-	if err := ioutil.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
 		fmt.Printf("main: failed to save pid: %s\n", err)
 	}
 

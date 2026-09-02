@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"math/bits"
 	"os"
@@ -1827,7 +1826,7 @@ func (mf *memFile) Truncate(size int64) error {
 	return nil
 }
 
-func (mf *memFile) dumpOnDisk(fpath string) error { return ioutil.WriteFile(fpath, mf.data, 0644) }
+func (mf *memFile) dumpOnDisk(fpath string) error { return os.WriteFile(fpath, mf.data, 0644) }
 
 // FillCompressed backfill cwhisper files from srcw.
 // The old and new whisper should have the same retention policies.

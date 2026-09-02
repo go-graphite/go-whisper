@@ -5,7 +5,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"os"
 	"strconv"
@@ -32,7 +32,7 @@ func main() {
 	} else if len(flag.Args()) > 1 {
 		body = flag.Args()[1]
 	} else {
-		in, err := ioutil.ReadAll(os.Stdin)
+		in, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			panic(err)
 		}

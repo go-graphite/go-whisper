@@ -5,7 +5,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 
@@ -28,7 +27,7 @@ func main() {
 	less := exec.Command("less")
 	if !*noLess {
 		less.Stdout = os.Stdout
-		temp, err := ioutil.TempFile("", "")
+		temp, err := os.CreateTemp("", "")
 		if err != nil {
 			fmt.Println(err.Error())
 			os.Exit(1)

@@ -3,7 +3,6 @@ package whisper
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"os"
@@ -755,7 +754,7 @@ func TestOpenValidatation(t *testing.T) {
 		path, _, _, tearDown := setUpCreate()
 		defer tearDown()
 
-		err := ioutil.WriteFile(path, data, 0777)
+		err := os.WriteFile(path, data, 0777)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -773,7 +772,7 @@ func TestOpenValidatation(t *testing.T) {
 		path, _, _, tearDown := setUpCreate()
 		defer tearDown()
 
-		err := ioutil.WriteFile(path, data, 0777)
+		err := os.WriteFile(path, data, 0777)
 		if err != nil {
 			t.Fatal(err)
 		}
