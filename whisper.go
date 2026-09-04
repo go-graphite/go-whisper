@@ -653,9 +653,10 @@ func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error
 // openWithOptions accepts an already-held path lock when a rewrite reopens the
 // replacement file without exposing an unlocked gap.
 func openWithOptions(path string, options *Options, lockFile *os.File) (whisper *Whisper, err error) {
+	if options == nil {
+		options = &Options{}
+	}
 	ownedLock := false
-	if options.FLock && !options.InMemory {
-		if options.FlockType != syscall.LOCK_SH {
 			options.FlockType = syscall.LOCK_EX
 		}
 		if lockFile == nil {
