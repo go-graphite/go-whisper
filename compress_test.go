@@ -1712,6 +1712,7 @@ func TestAggregatePercentile(t *testing.T) {
 // observable half of that cleanup.
 func TestRewriteCleansUpAfterFailure(t *testing.T) {
 	cwhisper, path, _ := newSingleRetentionOOO(t, false)
+	defer cwhisper.Close()
 	rets, _, _ := cwhisper.computeExtendedRetentions()
 
 	// truncate away the archive data so the first block read inside rewrite,
