@@ -132,10 +132,7 @@ func (whisper *Whisper) discardOrphanedOOO() {
 	}
 	if err := os.Remove(path); err != nil {
 		whisper.NonFatalErrors = append(whisper.NonFatalErrors, fmt.Errorf("remove orphaned out-of-order sidecar %s: %w", path, err))
-		return
 	}
-
-	whisper.NonFatalErrors = append(whisper.NonFatalErrors, fmt.Errorf("removed orphaned out-of-order sidecar %s", path))
 }
 
 func (whisper *Whisper) oooOptions() *Options {
@@ -436,8 +433,21 @@ func (whisper *Whisper) MergeOutOfOrder() error {
 		return fmt.Errorf("merge out-of-order points: %w", err)
 	}
 
+	// The merge itself is done here: the points are in the main file and the
+	// rewrite has been renamed into place. A sidecar that will not delete is
+	// therefore stale rather than pending, so latch it unusable and report it
+	// non-fatally. Returning an error instead would leave oooPath set, and the
+	// caller would redo the whole file rewrite on every subsequent write,
+	// spending its compaction budget on data that is already merged.
+	//
+	// Reopening the file does pick the leftover up again and merge it once more,
+	// harmlessly (the main file wins on read), so the waste is bounded per open
+	// rather than per write.
 	if err := os.Remove(sidecarPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove out-of-order sidecar %s: %w", sidecarPath, err)
+		whisper.markOOOBroken(fmt.Errorf("remove out-of-order sidecar %s: %w", sidecarPath, err))
+		whisper.OutOfOrderPoints = 0
+
+		return nil
 	}
 	whisper.oooPath = ""
 	whisper.OutOfOrderPoints = 0

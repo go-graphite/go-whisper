@@ -809,6 +809,25 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 		return fmt.Errorf("%s: %s", op, err)
 	}
 
+	// Every error return between here and the explicit close below abandons
+	// nwhisper, so without this its descriptor and temp file are leaked. A
+	// sustained disk error storm rewriting many metrics would otherwise walk the
+	// process into EMFILE. The explicit close sets nwhisperClosed, so the
+	// handed-off handle is never closed twice, and by the time nwhisper is
+	// reused for the reopen below this is already a no-op.
+	nwhisperClosed := false
+	defer func() {
+		if nwhisperClosed {
+			return
+		}
+		_ = nwhisper.file.Close()
+		if whisper.opts.InMemory {
+			releaseMemFile(tmpname)
+		} else {
+			_ = os.Remove(tmpname)
+		}
+	}()
+
 	for i := len(whisper.archives) - 1; i >= 0; i-- {
 		archive := whisper.archives[i]
 		copy(nwhisper.archives[i].buffer, archive.buffer)
@@ -864,6 +883,7 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 	if err := nwhisper.file.Close(); err != nil {
 		nferrs = append(nferrs, err)
 	}
+	nwhisperClosed = true
 
 	if whisper.opts.InMemory {
 		whisper.file.(*memFile).data = nwhisper.file.(*memFile).data
