@@ -1705,3 +1705,27 @@ func TestAggregatePercentile(t *testing.T) {
 		}
 	}
 }
+
+// A rewrite that fails partway must not leak the temp file it was building into,
+// nor its descriptor: a metric rewritten repeatedly under a failing disk would
+// otherwise walk the process into EMFILE. The temp file's absence is the
+// observable half of that cleanup.
+func TestRewriteCleansUpAfterFailure(t *testing.T) {
+	cwhisper, path, _ := newSingleRetentionOOO(t, false)
+	defer cwhisper.Close()
+	rets, _, _ := cwhisper.computeExtendedRetentions()
+
+	// truncate away the archive data so the first block read inside rewrite,
+	// after the temp file has already been created, hits EOF
+	if err := cwhisper.file.(*os.File).Truncate(int64(cwhisper.MetadataSize())); err != nil {
+		t.Fatalf("truncate: %s", err)
+	}
+
+	if err := cwhisper.rewrite(rets, "compact", nil); err == nil {
+		t.Fatal("rewrite of a truncated file returned no error")
+	}
+
+	if _, err := os.Stat(path + ".compact"); !os.IsNotExist(err) {
+		t.Errorf("temp file left behind after failed rewrite: stat err = %v", err)
+	}
+}
