@@ -657,6 +657,8 @@ func openWithOptions(path string, options *Options, lockFile *os.File) (whisper 
 		options = &Options{}
 	}
 	ownedLock := false
+	if options.FLock && !options.InMemory {
+		if options.FlockType != syscall.LOCK_SH {
 			options.FlockType = syscall.LOCK_EX
 		}
 		if lockFile == nil {
