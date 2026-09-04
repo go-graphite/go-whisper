@@ -877,6 +877,15 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 		return fmt.Errorf("%s: failed to write header: %w", op, err)
 	}
 
+	lockFile := whisper.lockFile
+	whisper.lockFile = nil
+	lockTransferred := false
+	defer func() {
+		if lockFile != nil && !lockTransferred {
+			_ = lockFile.Close()
+		}
+	}()
+
 	if err := whisper.Close(); err != nil {
 		nferrs = append(nferrs, err)
 	}
@@ -897,10 +906,11 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 	// detectOOO, so only what a stat cannot tell us has to be carried over.
 	oooPoints, oooBroken := whisper.OutOfOrderPoints, whisper.oooBroken
 
-	nwhisper, err = OpenWithOptions(filename, whisper.opts)
+	nwhisper, err = openWithOptions(filename, whisper.opts, lockFile)
 	if err != nil {
 		return fmt.Errorf("%s/reopen: %w", op, err)
 	}
+	lockTransferred = true
 	*whisper = *nwhisper
 	whisper.OutOfOrderPoints, whisper.oooBroken = oooPoints, oooBroken
 	if oooBroken {

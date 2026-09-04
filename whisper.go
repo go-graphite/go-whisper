@@ -156,7 +156,8 @@ Represents a Whisper database file.
 */
 type Whisper struct {
 	// file *os.File
-	file file
+	file     file
+	lockFile *os.File
 
 	// Metadata
 	aggregationMethod AggregationMethod
@@ -376,6 +377,20 @@ func (whisper *Whisper) fileReadAt(b []byte, off int64) error {
 	return err
 }
 
+func acquirePathLock(path string, lockType int) (*os.File, error) {
+	// Keep this file after unlocking: unlike the database inode, its identity
+	// must survive compressed rewrites that rename a replacement into place.
+	lockFile, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0666) // skipcq: GSC-G302
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), lockType); err != nil {
+		_ = lockFile.Close()
+		return nil, err
+	}
+	return lockFile, nil
+}
+
 /*
 Create a new Whisper database file and write it's header.
 */
@@ -401,6 +416,18 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	sort.Sort(retentionsByPrecision{retentions})
 	if err = validateRetentions(retentions); err != nil {
 		return nil, err
+	}
+	var lockFile *os.File
+	if options.FLock && !options.InMemory {
+		lockFile, err = acquirePathLock(path, syscall.LOCK_EX)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				_ = lockFile.Close()
+			}
+		}()
 	}
 	_, err = os.Stat(path)
 	if err == nil {
@@ -434,6 +461,7 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 
 	// Set the metadata
 	whisper.file = file
+	whisper.lockFile = lockFile
 	whisper.aggregationMethod = aggregationMethod
 	whisper.xFilesFactor = xFilesFactor
 	whisper.opts = options
@@ -619,6 +647,27 @@ func Open(path string) (whisper *Whisper, err error) {
 }
 
 func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error) {
+	return openWithOptions(path, options, nil)
+}
+
+// openWithOptions accepts an already-held path lock when a rewrite reopens the
+// replacement file without exposing an unlocked gap.
+func openWithOptions(path string, options *Options, lockFile *os.File) (whisper *Whisper, err error) {
+	if options == nil {
+		options = &Options{}
+	}
+	ownedLock := false
+			options.FlockType = syscall.LOCK_EX
+		}
+		if lockFile == nil {
+			lockFile, err = acquirePathLock(path, options.FlockType)
+			if err != nil {
+				return nil, err
+			}
+			ownedLock = true
+		}
+	}
+
 	var file file
 	if options.InMemory {
 		if mc := options.InMemoryContent; mc != nil {
@@ -638,20 +687,23 @@ func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error
 		file, err = os.OpenFile(path, flag, 0666) // skipcq: GSC-G302
 	}
 	if err != nil {
+		if ownedLock {
+			_ = lockFile.Close()
+		}
 		return
 	}
 
 	defer func() {
 		if err != nil {
 			whisper = nil
-			file.Close()
+			_ = file.Close()
+			if ownedLock {
+				_ = lockFile.Close()
+			}
 		}
 	}()
 
 	if options.FLock {
-		if options.FlockType != syscall.LOCK_SH {
-			options.FlockType = syscall.LOCK_EX
-		}
 		if err = syscall.Flock(int(file.Fd()), options.FlockType); err != nil {
 			return
 		}
@@ -659,6 +711,7 @@ func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error
 
 	whisper = new(Whisper)
 	whisper.file = file
+	whisper.lockFile = lockFile
 	whisper.opts = options
 
 	b := make([]byte, len(compressedMagicString))
@@ -778,11 +831,19 @@ func (whisper *Whisper) Close() error {
 	// the sidecar's error is reported only if the main file closes cleanly:
 	// failing to write back the metric itself is the more important one
 	oooErr := whisper.closeOOO()
-	if err := whisper.file.Close(); err != nil {
-		return err
+	fileErr := whisper.file.Close()
+	var lockErr error
+	if whisper.lockFile != nil {
+		lockErr = whisper.lockFile.Close()
+		whisper.lockFile = nil
 	}
-
-	return oooErr
+	if fileErr != nil {
+		return fileErr
+	}
+	if oooErr != nil {
+		return oooErr
+	}
+	return lockErr
 }
 
 /*
@@ -1842,7 +1903,8 @@ func (whisper *Whisper) HasMatchingConfigs(rets Retentions, aggr AggregationMeth
 }
 
 func (whisper *Whisper) UpdateConfig(rets Retentions, aggr AggregationMethod, xff float32, options *Options) (err error) {
-	newFilename := whisper.file.Name() + ".migrate"
+	filename := whisper.file.Name()
+	newFilename := filename + ".migrate"
 	os.Remove(newFilename) // in case there are broken/corrupted migrate files not being cleaned up properly
 
 	defer func() {
@@ -1866,7 +1928,9 @@ func (whisper *Whisper) UpdateConfig(rets Retentions, aggr AggregationMethod, xf
 	}
 
 	if updateRets {
-		newWhisper, err := CreateWithOptions(newFilename, rets, aggr, xff, options)
+		migrateOptions := *options
+		migrateOptions.FLock = false
+		newWhisper, err := CreateWithOptions(newFilename, rets, aggr, xff, &migrateOptions)
 		if err != nil {
 			return err
 		}
@@ -1879,6 +1943,11 @@ func (whisper *Whisper) UpdateConfig(rets Retentions, aggr AggregationMethod, xf
 
 		// error ignored here, not much we can do if we fail to close files?
 		newWhisper.Close()
+		lockFile := whisper.lockFile
+		whisper.lockFile = nil
+		if lockFile != nil {
+			defer func() { _ = lockFile.Close() }()
+		}
 		whisper.Close()
 
 		if err != nil {
@@ -1886,7 +1955,7 @@ func (whisper *Whisper) UpdateConfig(rets Retentions, aggr AggregationMethod, xf
 		}
 
 		// how about aggregations: go-carbon will use the new aggr when updating retentions
-		return os.Rename(newFilename, whisper.file.Name())
+		return os.Rename(newFilename, filename)
 	}
 
 	if updateAggrXff {

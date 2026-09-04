@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -1728,4 +1729,83 @@ func TestRewriteCleansUpAfterFailure(t *testing.T) {
 	if _, err := os.Stat(path + ".compact"); !os.IsNotExist(err) {
 		t.Errorf("temp file left behind after failed rewrite: stat err = %v", err)
 	}
+}
+
+func TestRewriteKeepsFlockAcrossRename(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metric.wsp")
+	opts := &Options{Compressed: true, FLock: true}
+	cwhisper, err := CreateWithOptions(
+		path,
+		Retentions{{secondsPerPoint: 1, numberOfPoints: 600}},
+		Average,
+		0.5,
+		opts,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := int(time.Now().Unix())
+	if err := cwhisper.UpdateMany([]*TimeSeriesPoint{{Time: now - 2, Value: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	writerStarted := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		close(writerStarted)
+		writer, err := OpenWithOptions(path, &Options{FLock: true})
+		if err == nil {
+			err = writer.UpdateMany([]*TimeSeriesPoint{{Time: now - 1, Value: 2}})
+			if closeErr := writer.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		writerDone <- err
+	}()
+	<-writerStarted
+
+	select {
+	case err := <-writerDone:
+		t.Fatalf("writer did not wait for the existing flock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	rets, _, _ := cwhisper.computeExtendedRetentions()
+	if err := cwhisper.rewrite(rets, "compact", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-writerDone:
+		t.Fatalf("writer escaped the flock during rewrite: %v", err)
+	default:
+	}
+	if err := cwhisper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writerDone; err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenWithOptions(path, &Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	series, err := reopened.Fetch(now-2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range series.Points() {
+		if point.Time == now-1 && point.Value == 2 {
+			return
+		}
+	}
+	t.Fatal("concurrent write was lost during rewrite")
 }
