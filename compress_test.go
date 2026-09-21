@@ -813,6 +813,7 @@ func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
 		{Value: 1, Time: now + 1},
 		{Value: 1, Time: now + 2},
 	})
+	// we can accept OOO for short period
 	cwhisper.UpdateMany([]*TimeSeriesPoint{
 		{Value: 0, Time: now + 1},
 	})
@@ -823,7 +824,38 @@ func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
 	}
 	if got, want := data.Points(), []TimeSeriesPoint{
 		{Time: now + 0, Value: 1},
-		{Time: now + 1, Value: 1},
+		{Time: now + 1, Value: 0},
+		{Time: now + 2, Value: 1},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("data.Points() = %v; want %v", got, want)
+	}
+	i := 3
+	var points []*TimeSeriesPoint
+	for {
+		points = append(
+			points,
+			&TimeSeriesPoint{Value: float64(i), Time: now + i},
+		)
+		if i > 120 {
+			break
+		}
+		i += 1
+	}
+	cwhisper.UpdateMany(points)
+
+	// buffer us flushed, can't accept OOO data not within the buffer
+
+	cwhisper.UpdateMany([]*TimeSeriesPoint{
+		{Value: 1000, Time: now + 1},
+	})
+
+	data, err = cwhisper.Fetch(now-1, now+2)
+	if err != nil {
+		t.Error(err)
+	}
+	if got, want := data.Points(), []TimeSeriesPoint{
+		{Time: now + 0, Value: 1},
+		{Time: now + 1, Value: 0},
 		{Time: now + 2, Value: 1},
 	}; !reflect.DeepEqual(got, want) {
 		t.Errorf("data.Points() = %v; want %v", got, want)

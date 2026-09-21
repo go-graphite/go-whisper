@@ -282,8 +282,6 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 		if !arc.hasBuffer() {
 			continue
 		}
-		arc.buffer = make([]byte, arc.bufferSize)
-
 		readed, err = whisper.file.Read(arc.buffer)
 		if err != nil {
 			return fmt.Errorf("unable to read archive %d buffer: %s", i, err)
@@ -519,7 +517,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 	}
 
 	baseIntervalsPerUnit, currentUnit, minInterval := archive.getBufferInfo()
-	bufferUnitPointsCount := archive.next.secondsPerPoint / archive.secondsPerPoint
+	bufferUnitPointsCount := whisper.bufferUnitPointsCount(archive)
 	for aindex := 0; aindex < len(alignedPoints); {
 		dp := alignedPoints[aindex]
 		dpBaseInterval := archive.AggregateInterval(dp.interval)
@@ -588,7 +586,9 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 			// TODO: record and continue?
 			return dropped, err
 		}
-
+		if archive.next == nil {
+			continue
+		}
 		// propagate
 		lower := archive.next
 		lowerIntervalStart := archive.AggregateInterval(dps[0].interval)
@@ -637,11 +637,11 @@ func (archive *archiveInfo) getBufferInfo() (units []int, index, min int) {
 }
 
 func (archive *archiveInfo) bufferUnitCount() int {
-	return len(archive.buffer) / PointSize / (archive.next.secondsPerPoint / archive.secondsPerPoint)
+	return len(archive.buffer) / PointSize / archive.whisper.bufferUnitPointsCount(archive)
 }
 
 func (archive *archiveInfo) getBufferByUnit(unit int) []byte {
-	count := archive.next.secondsPerPoint / archive.secondsPerPoint
+	count := archive.whisper.bufferUnitPointsCount(archive)
 	lb := unit * PointSize * count
 	ub := (unit + 1) * PointSize * count
 	return archive.buffer[lb:ub]
