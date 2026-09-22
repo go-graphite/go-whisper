@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -922,6 +923,80 @@ func TestOutOfOrderRemoveSidecar(t *testing.T) {
 	}
 	if removed {
 		t.Error("removed = true on the second call; want false")
+	}
+}
+
+func TestOutOfOrderLongFilenameWithFLock(t *testing.T) {
+	tests := []struct {
+		name              string
+		filenameLength    int
+		wantHashedSidecar bool
+	}{
+		{
+			name:           "sidecar lock exceeds limit",
+			filenameLength: maxFilenameLength - len(lockSuffix),
+		},
+		{
+			name:              "sidecar exceeds limit",
+			filenameLength:    maxFilenameLength,
+			wantHashedSidecar: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filename := strings.Repeat("m", tt.filenameLength-len(".wsp")) + ".wsp"
+			path := filepath.Join(t.TempDir(), filename)
+			w, err := CreateWithOptions(
+				path,
+				[]*Retention{{secondsPerPoint: 1, numberOfPoints: 7200}},
+				Sum,
+				0,
+				&Options{
+					Compressed:       true,
+					FLock:            true,
+					IgnoreNowOnWrite: true,
+					OutOfOrder:       true,
+					PointsPerBlock:   1200,
+				},
+			)
+			if err != nil {
+				t.Fatalf("create: %s", err)
+			}
+			defer w.Close()
+
+			base := int(time.Now().Unix()) - 3600
+			if err := w.UpdateMany([]*TimeSeriesPoint{
+				{Time: base, Value: 1},
+				{Time: base + 2, Value: 2},
+				{Time: base + 4, Value: 3},
+			}); err != nil {
+				t.Fatalf("initial update: %s", err)
+			}
+			if err := w.UpdateMany([]*TimeSeriesPoint{{Time: base + 1, Value: 7}}); err != nil {
+				t.Fatalf("late update: %s", err)
+			}
+
+			sidecarPath := OutOfOrderSidecarPath(path)
+			if got := sidecarPath != path+oooSuffix; got != tt.wantHashedSidecar {
+				t.Errorf("hashed sidecar = %v; want %v (path %q)", got, tt.wantHashedSidecar, sidecarPath)
+			}
+			if _, err := os.Stat(sidecarPath); err != nil {
+				t.Fatalf("stat sidecar: %s", err)
+			}
+			if _, err := os.Stat(auxiliaryPath(path, lockSuffix)); err != nil {
+				t.Fatalf("stat main lock: %s", err)
+			}
+			if _, err := os.Stat(auxiliaryPath(sidecarPath, lockSuffix)); err != nil {
+				t.Fatalf("stat sidecar lock: %s", err)
+			}
+
+			ts, err := w.Fetch(base-1, base+5)
+			if err != nil {
+				t.Fatalf("fetch: %s", err)
+			}
+			assertValues(t, ts, []float64{1, 7, 2, math.NaN(), 3, math.NaN()})
+		})
 	}
 }
 
