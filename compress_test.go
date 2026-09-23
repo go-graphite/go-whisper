@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1728,6 +1729,34 @@ func TestRewriteCleansUpAfterFailure(t *testing.T) {
 
 	if _, err := os.Stat(path + ".compact"); !os.IsNotExist(err) {
 		t.Errorf("temp file left behind after failed rewrite: stat err = %v", err)
+	}
+}
+
+func TestRewriteLongFilename(t *testing.T) {
+	for _, op := range []string{"extend", "compact"} {
+		t.Run(op, func(t *testing.T) {
+			filename := strings.Repeat("m", maxFilenameLength-len(".wsp")) + ".wsp"
+			path := filepath.Join(t.TempDir(), filename)
+			cwhisper, err := CreateWithOptions(
+				path,
+				Retentions{{secondsPerPoint: 1, numberOfPoints: 600}},
+				Average,
+				0.5,
+				&Options{Compressed: true},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cwhisper.Close()
+
+			rets, _, _ := cwhisper.computeExtendedRetentions()
+			if err := cwhisper.rewrite(rets, op, nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("stat rewritten file: %s", err)
+			}
+		})
 	}
 }
 
