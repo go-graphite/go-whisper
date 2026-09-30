@@ -19,6 +19,10 @@ type compactionFixture struct {
 }
 
 func newCompactionFixture(tb testing.TB) compactionFixture {
+	return newCompactionFixtureWithLateStart(tb, 0)
+}
+
+func newCompactionFixtureWithLateStart(tb testing.TB, lateStart int) compactionFixture {
 	tb.Helper()
 	const count = 32768
 	retention := whisper.NewRetention(1, 131071)
@@ -38,14 +42,14 @@ func newCompactionFixture(tb testing.TB) compactionFixture {
 		value := float64((i*7919)%65521) / 7
 		f.want[i] = value
 		p := &whisper.TimeSeriesPoint{Time: base + i, Value: value}
-		if i%97 == 1 {
+		if i >= lateStart && i%97 == 1 {
 			late = append(late, p)
 		} else {
 			onTime = append(onTime, p)
 		}
 	}
 	// The existing main-file value must win over a conflicting sidecar point.
-	late = append(late, &whisper.TimeSeriesPoint{Time: base + 2, Value: -1})
+	late = append(late, &whisper.TimeSeriesPoint{Time: base + lateStart + 2, Value: -1})
 	if err := w.UpdateMany(onTime); err != nil {
 		tb.Fatal(err)
 	}
@@ -146,8 +150,16 @@ func TestWhisperCompactionTruncatedSidecar(t *testing.T) {
 }
 
 func BenchmarkWhisperCompaction(b *testing.B) {
+	benchmarkWhisperCompaction(b, 0)
+}
+
+func BenchmarkWhisperCompactionRecent(b *testing.B) {
+	benchmarkWhisperCompaction(b, 32000)
+}
+
+func benchmarkWhisperCompaction(b *testing.B, lateStart int) {
 	b.StopTimer()
-	f := newCompactionFixture(b)
+	f := newCompactionFixtureWithLateStart(b, lateStart)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
