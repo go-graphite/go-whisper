@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
-	github.com/go-graphite/go-whisper v0.0.0
+	github.com/go-graphite/go-whisper v0.0.0-20261001144427-92b38c79ada0
 )
 
 require (

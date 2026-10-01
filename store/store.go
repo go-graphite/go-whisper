@@ -24,6 +24,7 @@ import (
 var (
 	ErrNotFound = errors.New("metric not found")
 	ErrExists   = errors.New("metric already exists")
+	ErrConflict = errors.New("metric changed or configuration is incompatible")
 )
 
 // Options constrains memory used by Pebble. Commits are always WAL-synchronised.
@@ -44,9 +45,11 @@ type Metadata struct {
 	MetricConfig
 	ID         uint64
 	Generation uint64
+	Revision   uint64
 }
 
 type Series struct {
+	Metadata  Metadata
 	FromTime  int
 	UntilTime int
 	Step      int
@@ -168,7 +171,7 @@ func (s *Store) Create(ctx context.Context, config MetricConfig) (Metadata, erro
 	if err != nil {
 		return Metadata{}, err
 	}
-	m := Metadata{MetricConfig: cloneConfig(config), ID: id, Generation: 1}
+	m := Metadata{MetricConfig: cloneConfig(config), ID: id, Generation: 1, Revision: 1}
 	b, err := marshalMetadata(m)
 	if err != nil {
 		return Metadata{}, fmt.Errorf("encode metadata: %w", err)
@@ -331,6 +334,14 @@ func (s *Store) update(ctx context.Context, m Metadata, points []whisper.TimeSer
 			}
 		}
 	}
+	m.Revision++
+	encoded, err := marshalMetadata(m)
+	if err != nil {
+		return err
+	}
+	if err := b.Set(catalogKey(m.Name), encoded, nil); err != nil {
+		return err
+	}
 	if err := b.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("sync update %s: %w", m.Name, err)
 	}
@@ -432,7 +443,7 @@ func (s *Store) Fetch(ctx context.Context, name string, fromTime, untilTime int)
 	if err != nil {
 		return nil, err
 	}
-	return &Series{FromTime: from, UntilTime: until, Step: step, Values: values}, nil
+	return &Series{Metadata: m, FromTime: from, UntilTime: until, Step: step, Values: values}, nil
 }
 
 func hasArchivePoint(reader pebble.Reader, m Metadata, archive int) (bool, error) {
@@ -446,6 +457,10 @@ func hasArchivePoint(reader pebble.Reader, m Metadata, archive int) (bool, error
 }
 
 func (s *Store) Delete(ctx context.Context, name string) error {
+	return s.delete(ctx, name, nil)
+}
+
+func (s *Store) delete(ctx context.Context, name string, expected *Metadata) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -456,6 +471,9 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	m, err := s.metadata(name)
 	if err != nil {
 		return err
+	}
+	if expected != nil && (m.ID != expected.ID || m.Generation != expected.Generation || m.Revision != expected.Revision) {
+		return ErrConflict
 	}
 	b := s.db.NewBatch()
 	defer b.Close()
@@ -529,6 +547,11 @@ func (s *Store) replace(ctx context.Context, snapshot Snapshot, mustAbsent bool)
 	}
 	unlock := s.lockMetric(snapshot.Metadata.Name)
 	defer unlock()
+	return s.replaceLocked(ctx, snapshot, mustAbsent)
+}
+
+// Caller holds the metric stripe; catalog publication remains atomic with slots.
+func (s *Store) replaceLocked(ctx context.Context, snapshot Snapshot, mustAbsent bool) (Metadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, err := s.metadata(snapshot.Metadata.Name)
@@ -545,9 +568,9 @@ func (s *Store) replace(ctx context.Context, snapshot Snapshot, mustAbsent bool)
 		if e != nil {
 			return Metadata{}, e
 		}
-		m.ID, m.Generation = id, 1
+		m.ID, m.Generation, m.Revision = id, 1, 1
 	} else {
-		m.ID, m.Generation = old.ID, old.Generation+1
+		m.ID, m.Generation, m.Revision = old.ID, old.Generation+1, old.Revision+1
 	}
 	b := s.db.NewIndexedBatch()
 	defer b.Close()
@@ -781,6 +804,20 @@ func (s *Store) ExportWSP(ctx context.Context, name, path string) error {
 	if err != nil {
 		return err
 	}
+	return s.ExportSnapshot(ctx, snapshot, path)
+}
+
+// ExportSnapshot exports exactly the generation and revision captured by Snapshot.
+func (s *Store) ExportSnapshot(ctx context.Context, snapshot Snapshot, path string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validate(snapshot.Metadata.MetricConfig); err != nil {
+		return err
+	}
+	if len(snapshot.Archives) != len(snapshot.Metadata.Retentions) {
+		return errors.New("snapshot archive count does not match retentions")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create export directory: %w", err)
 	}
@@ -800,31 +837,53 @@ func (s *Store) ExportWSP(ctx context.Context, name, path string) error {
 	return nil
 }
 
-// ImportWSP snapshots every archive before publishing it as one new generation.
-// Compressed source readers merge an existing cwhisper .ooo sidecar on Fetch;
-// direct archive snapshots do not currently include its unmerged sidecar.
+// ImportWSP reads a quiesced source and atomically publishes all archives.
 func (s *Store) ImportWSP(ctx context.Context, name, path string, replace bool) (Metadata, error) {
-	snapshotPath, cleanup, err := whisper.OfflineMergeOutOfOrderSnapshot(path)
+	snapshot, err := readWSP(ctx, name, path)
 	if err != nil {
 		return Metadata{}, err
+	}
+	return s.replace(ctx, snapshot, !replace)
+}
+
+func readWSP(ctx context.Context, name, path string) (Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
+	snapshotPath, cleanup, err := whisper.OfflineMergeOutOfOrderSnapshot(path)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	defer cleanup()
 	readOnly := os.O_RDONLY
 	w, err := whisper.OpenWithOptions(snapshotPath, &whisper.Options{OpenFileFlag: &readOnly})
 	if err != nil {
-		return Metadata{}, fmt.Errorf("open import: %w", err)
+		return Snapshot{}, fmt.Errorf("open import: %w", err)
 	}
 	defer w.Close()
 	cfg := MetricConfig{Name: name, Retentions: w.Retentions(), AggregationMethod: w.AggregationMethod(), XFilesFactor: w.XFilesFactor()}
+	if err := validate(cfg); err != nil {
+		return Snapshot{}, err
+	}
+	if !w.IsCompressed() {
+		info, err := os.Stat(snapshotPath)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("stat import: %w", err)
+		}
+		// Check declared capacity before ArchivePoints allocates its buffers.
+		if int64(w.Size()) > info.Size() {
+			return Snapshot{}, errors.New("import archives exceed file size")
+		}
+	}
 	snapshot := Snapshot{Metadata: Metadata{MetricConfig: cfg}, Archives: make([]Archive, len(cfg.Retentions))}
 	for i, r := range cfg.Retentions {
-		points, e := w.ArchivePoints(i)
-		if e != nil {
-			return Metadata{}, fmt.Errorf("snapshot archive %d: %w", i, e)
+		points, err := w.ArchivePoints(i)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("snapshot archive %d: %w", i, err)
 		}
 		snapshot.Archives[i] = Archive{Retention: r, Points: points}
 	}
-	return s.replace(ctx, snapshot, !replace)
+	return snapshot, nil
 }
 
 func (a Archive) PointsToPointers() []*whisper.TimeSeriesPoint {
@@ -846,10 +905,11 @@ type persistedMetadata struct {
 	XFilesFactor      float32
 	ID                uint64
 	Generation        uint64
+	Revision          uint64
 }
 
 func marshalMetadata(m Metadata) ([]byte, error) {
-	p := persistedMetadata{Name: m.Name, AggregationMethod: m.AggregationMethod, XFilesFactor: m.XFilesFactor, ID: m.ID, Generation: m.Generation, Retentions: make([]persistedRetention, len(m.Retentions))}
+	p := persistedMetadata{Name: m.Name, AggregationMethod: m.AggregationMethod, XFilesFactor: m.XFilesFactor, ID: m.ID, Generation: m.Generation, Revision: m.Revision, Retentions: make([]persistedRetention, len(m.Retentions))}
 	for i, r := range m.Retentions {
 		p.Retentions[i] = persistedRetention{r.SecondsPerPoint(), r.NumberOfPoints()}
 	}
@@ -860,7 +920,7 @@ func unmarshalMetadata(value []byte) (Metadata, error) {
 	if err := json.Unmarshal(value, &p); err != nil {
 		return Metadata{}, fmt.Errorf("decode catalog: %w", err)
 	}
-	m := Metadata{MetricConfig: MetricConfig{Name: p.Name, AggregationMethod: p.AggregationMethod, XFilesFactor: p.XFilesFactor, Retentions: make([]whisper.Retention, len(p.Retentions))}, ID: p.ID, Generation: p.Generation}
+	m := Metadata{MetricConfig: MetricConfig{Name: p.Name, AggregationMethod: p.AggregationMethod, XFilesFactor: p.XFilesFactor, Retentions: make([]whisper.Retention, len(p.Retentions))}, ID: p.ID, Generation: p.Generation, Revision: p.Revision}
 	for i, r := range p.Retentions {
 		m.Retentions[i] = whisper.NewRetention(r.SecondsPerPoint, r.NumberOfPoints)
 	}

@@ -2,12 +2,17 @@
 
 `store` is a standalone Pebble-backed prototype. It stores many metrics in one
 directory, keeps a catalog plus circular archive slots, and syncs every accepted
-batch to Pebble's WAL before returning. It deliberately has no go-carbon or
-buckytools integration.
+batch to Pebble's WAL before returning. It has no go-carbon dependency;
+consumers inject the same store handle into persistence, reads and administration.
 
 The package exposes classic-style `Update`, `UpdateMany`, `Fetch`, metadata,
-listing, deletion, snapshots, and archive-preserving classic `.wsp` import and
-export. `Replace` publishes a new metric generation atomically. Use `Flush`,
+paged catalog listing, deletion, snapshots, and archive-preserving classic `.wsp`
+import and export. `Replace` publishes a new metric generation atomically.
+`FillWSP` atomically fills missing archive slots while preserving destination
+values and rejecting incompatible policies. Metadata revisions advance with
+synced writes/replacements; `DeleteIfUnchanged` rejects stale transfer snapshots
+and delete/recreate races. `Fetch` includes metadata from the same snapshot;
+`ExportSnapshot` exports exactly the captured revision. Use `Flush`,
 `Compact`, and `Stats` only for maintenance and benchmark measurement.
 
 Run the focused suite with `go test ./...` from this directory. The benchmark
@@ -30,13 +35,13 @@ compressed files are rejected.
 The API is behavioral compatibility for classic Whisper, not a filesystem-level
 replacement: consumers must use the catalog and store methods instead of walking
 `.wsp` paths. Pebble v1.1.5 is pinned in this separate module; the root Whisper
-module and consumer dependency sets remain unchanged. SSTables use Pebble's
+module does not depend on Pebble; consumers importing `store` add that dependency. SSTables use Pebble's
 Snappy compression and its shared WAL/memtables handle out-of-order updates.
 
-Caller batches, catalog lists, snapshots and concurrent exports are not globally
-memory-bounded. The prototype does not implement tenant quotas, online schema
-migration, an administration API, or consumer lifecycle integration. Stop callers
-before closing the store. Fault injection for disk-full, failed sync and torn WAL
+Caller batches, whole-catalog lists, snapshots and concurrent exports are not
+globally memory-bounded. `ListPage` bounds each catalog read. Consumers must bound
+requests, enforce quotas and join callers before closing the store. The module
+does not implement online schema migration or own a network administration API. Fault injection for disk-full, failed sync and torn WAL
 records remains required before production use.
 
 See [COMPARISON.md](COMPARISON.md) for the measured fixture comparison and exact
