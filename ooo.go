@@ -406,6 +406,12 @@ func (whisper *Whisper) MergeOutOfOrderWithOptions(options OutOfOrderMergeOption
 }
 
 func (whisper *Whisper) mergeOutOfOrder(options *OutOfOrderMergeOptions) (bool, error) {
+	return whisper.mergeOutOfOrderAt(options, Now())
+}
+
+// mergeOutOfOrderAt is used by offline snapshotting to choose an explicit
+// retention horizon without changing the package-global Now hook.
+func (whisper *Whisper) mergeOutOfOrderAt(options *OutOfOrderMergeOptions, now time.Time) (bool, error) {
 	if !whisper.compressed {
 		return false, errors.New("out-of-order merge is only supported for the compressed format")
 	}
@@ -436,12 +442,12 @@ func (whisper *Whisper) mergeOutOfOrder(options *OutOfOrderMergeOptions) (bool, 
 		if i >= len(sidecar.archives) {
 			break
 		}
-		if extras[i], err = readArchivePoints(sidecar, i); err != nil {
+		if extras[i], err = readArchivePointsAt(sidecar, i, now); err != nil {
 			whisper.closeOOO()
 			return false, fmt.Errorf("merge out-of-order points: %w", err)
 		}
 	}
-	if options != nil && !whisper.shouldMergeOutOfOrder(extras, *options, Now()) {
+	if options != nil && !whisper.shouldMergeOutOfOrder(extras, *options, now) {
 		return false, nil
 	}
 
@@ -762,6 +768,10 @@ func spanOf(lists ...[]dataPoint) (from, until int, ok bool) {
 // readArchivePoints returns every live point in archive index of a classic
 // whisper file, ascending by interval.
 func readArchivePoints(w *Whisper, index int) ([]dataPoint, error) {
+	return readArchivePointsAt(w, index, Now())
+}
+
+func readArchivePointsAt(w *Whisper, index int, now time.Time) ([]dataPoint, error) {
 	archive := w.archives[index]
 
 	// Sparse sidecars can have long retentions but few live points. Keep
@@ -774,7 +784,7 @@ func readArchivePoints(w *Whisper, index int) ([]dataPoint, error) {
 
 	// a classic archive is a ring buffer: unwritten slots are zero, and slots
 	// not yet overwritten since the last wrap hold points older than retention
-	oldest := int(Now().Unix()) - archive.MaxRetention()
+	oldest := int(now.Unix()) - archive.MaxRetention()
 
 	var points []dataPoint
 	for offset := 0; offset < archive.Size(); {

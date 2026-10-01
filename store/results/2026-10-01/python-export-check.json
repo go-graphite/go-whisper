@@ -1,0 +1,58 @@
+[
+  {
+    "source": "/private/tmp/storebench-verified-20261001/classic/test3_fast_simple.wsp",
+    "exported": "/private/tmp/storebench-verified-20261001/pebble/exports-after/test3_fast_simple.wsp",
+    "now": 1589728551,
+    "queries": 12,
+    "values_checked": 230969,
+    "present_values_checked": 60541
+  },
+  {
+    "source": "/private/tmp/storebench-verified-20261001/classic/test3_less_random_time_value.wsp",
+    "exported": "/private/tmp/storebench-verified-20261001/pebble/exports-after/test3_less_random_time_value.wsp",
+    "now": 1589728551,
+    "queries": 12,
+    "values_checked": 230969,
+    "present_values_checked": 63225
+  },
+  {
+    "source": "/private/tmp/storebench-verified-20261001/classic/test3_random_time.wsp",
+    "exported": "/private/tmp/storebench-verified-20261001/pebble/exports-after/test3_random_time.wsp",
+    "now": 1589728551,
+    "queries": 12,
+    "values_checked": 230969,
+    "present_values_checked": 18662
+  },
+  {
+    "source": "/private/tmp/storebench-verified-20261001/classic/test3_random_time_value.wsp",
+    "exported": "/private/tmp/storebench-verified-20261001/pebble/exports-after/test3_random_time_value.wsp",
+    "now": 1589728551,
+    "queries": 12,
+    "values_checked": 230969,
+    "present_values_checked": 1636
+  },
+  {
+    "source": "/private/tmp/storebench-verified-20261001/classic/test3_random_value.wsp",
+    "exported": "/private/tmp/storebench-verified-20261001/pebble/exports-after/test3_random_value.wsp",
+    "now": 1589728551,
+    "queries": 12,
+    "values_checked": 230969,
+    "present_values_checked": 30
+  },
+  {
+    "source": "/private/tmp/storebench-verified-20261001/classic/test3_random_value2.wsp",
+    "exported": "/private/tmp/storebench-verified-20261001/pebble/exports-after/test3_random_value2.wsp",
+    "now": 1589728551,
+    "queries": 12,
+    "values_checked": 230969,
+    "present_values_checked": 30
+  },
+  {
+    "source": "/private/tmp/storebench-verified-20261001/classic/test3_simple.wsp",
+    "exported": "/private/tmp/storebench-verified-20261001/pebble/exports-after/test3_simple.wsp",
+    "now": 1589728551,
+    "queries": 12,
+    "values_checked": 230969,
+    "present_values_checked": 30
+  }
+]
