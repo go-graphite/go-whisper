@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	stdcrc32 "hash/crc32"
 	"math"
 	"os"
 	"regexp"
@@ -1857,19 +1858,9 @@ func mod(a, b int) int {
 	return a - (b * int(math.Floor(float64(a)/float64(b))))
 }
 
-// TODO: optmize with assembly
-// from https://create.stephan-brumme.com/crc32/
+// crc32 preserves the incremental IEEE checksum used by compressed files.
 func crc32(data []byte, prev uint32) uint32 {
-	const polynomial uint32 = 0xEDB88320
-
-	crc := prev ^ 0xFFFFFFFF
-	for _, b := range data {
-		crc ^= uint32(b)
-		for i := 0; i < 8; i++ {
-			crc = (crc >> 1) ^ (uint32(-1*int32(crc&1)) & polynomial)
-		}
-	}
-	return crc ^ 0xFFFFFFFF
+	return stdcrc32.Update(prev, stdcrc32.IEEETable, data)
 }
 
 func (whisper *Whisper) File() *os.File { return whisper.file.(*os.File) }
