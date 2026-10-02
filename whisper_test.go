@@ -591,14 +591,17 @@ func TestCreateUpdateManyOnly_old_points(t *testing.T) {
 }
 
 func Test_extractPoints(t *testing.T) {
-	points := makeGoodPoints(100, 1, func(i int) float64 { return float64(i) })
-	now := int(time.Now().Unix())
-	currentPoints, remainingPoints := extractPoints(points, now, 50)
-	if length := len(currentPoints); length != 50 {
-		t.Fatalf("First: %v", length)
+	const now = 1700000000
+	points := make([]*TimeSeriesPoint, 100)
+	for i := range points {
+		points[i] = &TimeSeriesPoint{Time: now - i, Value: float64(i)}
 	}
-	if length := len(remainingPoints); length != 50 {
-		t.Fatalf("Second: %v", length)
+	currentPoints, remainingPoints := extractPoints(points, now, 50)
+	if len(currentPoints) != 51 || len(remainingPoints) != 49 {
+		t.Fatalf("split sizes = %d/%d; want 51/49", len(currentPoints), len(remainingPoints))
+	}
+	if currentPoints[50].Time != now-50 || remainingPoints[0].Time != now-51 {
+		t.Fatal("retention boundary was routed to the wrong archive")
 	}
 }
 

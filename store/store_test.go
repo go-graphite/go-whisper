@@ -118,8 +118,8 @@ func TestUpdateManyCircularSlotsAndRecovery(t *testing.T) {
 	if series.Step != 10 || series.FromTime != 9_980 {
 		t.Fatalf("unexpected series header: %#v", series)
 	}
-	if !math.IsNaN(series.Values[0]) || series.Values[1] != 3 {
-		t.Fatalf("values = %v, want [NaN 3]", series.Values)
+	if series.Values[0] != 2 || series.Values[1] != 3 || !math.IsNaN(series.Values[2]) {
+		t.Fatalf("values = %v, want [2 3 NaN]", series.Values)
 	}
 	if err := s.Update(ctx, "a.b", 1, now+1); err == nil {
 		t.Fatal("Update accepted a future point")
@@ -243,7 +243,7 @@ func TestUpdateManyKeepsExactRetentionBoundaryInHigherPrecision(t *testing.T) {
 	}
 }
 
-func TestUpdateManyPreservesClassicMixedAgeBoundaryQuirk(t *testing.T) {
+func TestUpdateManyRoutesMixedAgesAtRetentionBoundary(t *testing.T) {
 	s := testStore(t, 10_000)
 	ctx := context.Background()
 	if _, err := s.Create(ctx, config("quirk", whisper.Average)); err != nil {
@@ -256,9 +256,57 @@ func TestUpdateManyPreservesClassicMixedAgeBoundaryQuirk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Archives[0].Points) != 1 || snapshot.Archives[0].Points[0].Time != 9990 {
-		t.Fatalf("fine archive = %#v", snapshot.Archives[0])
+	if got := snapshot.Archives[0].Points; len(got) != 2 || got[0] != (whisper.TimeSeriesPoint{Time: 9900, Value: 2}) || got[1] != (whisper.TimeSeriesPoint{Time: 9990, Value: 1}) {
+		t.Fatalf("fine archive = %#v, want points at 9900 and 9990", got)
 	}
+	if got := snapshot.Archives[1].Points; len(got) != 1 || got[0] != (whisper.TimeSeriesPoint{Time: 9780, Value: 3}) {
+		t.Fatalf("coarse archive = %#v, want point at 9780", got)
+	}
+}
+
+func TestUpdateManyPropagatesAllOriginalIntervalsPastPartialXFilesFactor(t *testing.T) {
+	const now = 10_000
+	s := testStore(t, now)
+	ctx := context.Background()
+	c := MetricConfig{
+		Name:              "partial-xff",
+		Retentions:        []whisper.Retention{whisper.NewRetention(1, 60), whisper.NewRetention(5, 36), whisper.NewRetention(30, 30)},
+		AggregationMethod: whisper.Average,
+		XFilesFactor:      0.5,
+	}
+	if _, err := s.Create(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+
+	// These direct five-second values can form the 30-second interval at 9930,
+	// but only a later raw update asks the normal propagation path to revisit it.
+	if err := s.UpdateManyForArchive(ctx, c.Name, []whisper.TimeSeriesPoint{{Time: 9940, Value: 1}, {Time: 9945, Value: 2}, {Time: 9950, Value: 3}}, c.Retentions[1].MaxRetention()); err != nil {
+		t.Fatal(err)
+	}
+	// The 9940 five-second bucket still fails XFF after this raw point. The
+	// 9970 bucket succeeds, which must advance propagation to archive 2 and
+	// recompute both original 30-second intervals.
+	points := []whisper.TimeSeriesPoint{{Time: 9941, Value: 9}}
+	for timestamp := 9970; timestamp < 9975; timestamp++ {
+		points = append(points, whisper.TimeSeriesPoint{Time: timestamp, Value: 1})
+	}
+	if err := s.UpdateMany(ctx, c.Name, points); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := s.Snapshot(ctx, c.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range snapshot.Archives[2].Points {
+		if point.Time == 9930 {
+			if point.Value != 2 {
+				t.Fatalf("recomputed 30-second value = %v; want 2", point.Value)
+			}
+			return
+		}
+	}
+	t.Fatalf("archive 2 did not recompute interval 9930: %#v", snapshot.Archives[2].Points)
 }
 
 func TestZeroLengthFetchFromEmptyArchiveIsEmpty(t *testing.T) {

@@ -381,7 +381,11 @@ func (whisper *Whisper) fileReadAt(b []byte, off int64) error {
 func acquirePathLock(path string, lockType int) (*os.File, error) {
 	// Keep this file after unlocking: unlike the database inode, its identity
 	// must survive compressed rewrites that rename a replacement into place.
-	lockFile, err := os.OpenFile(auxiliaryPath(path, lockSuffix), os.O_CREATE|os.O_RDWR, 0666) // skipcq: GSC-G302
+	lockPath := auxiliaryPath(path, lockSuffix)
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR, 0666) // skipcq: GSC-G302
+	if errors.Is(err, os.ErrNotExist) {
+		lockFile, err = os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0666) // skipcq: GSC-G302
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1027,6 +1031,7 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 	// points the compressed encoder rejects as too old, collected so they can
 	// be diverted to the out-of-order sidecar below instead of being lost
 	var dropped []oooPoint
+	var corrections [][]dataPoint
 
 	var currentPoints []*TimeSeriesPoint
 	for i := 0; i < len(whisper.archives); i++ {
@@ -1056,6 +1061,24 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 			// properly: ChunkUpdateSize
 			var archiveDropped []oooPoint
 			archiveDropped, err = whisper.archiveUpdateManyCompressed(archive, currentPoints)
+			if i > 0 && whisper.oooEnabled() {
+				// Explicit historical samples are authoritative coarse writes,
+				// unlike partial aggregates propagated from a finer archive. The
+				// sidecar format cannot distinguish them, so rewrite corrections
+				// under the existing path lock instead of losing that distinction.
+				kept := archiveDropped[:0]
+				for _, point := range archiveDropped {
+					if point.retention == archive.MaxRetention() {
+						if corrections == nil {
+							corrections = make([][]dataPoint, len(whisper.archives))
+						}
+						corrections[i] = append(corrections[i], point.point)
+					} else {
+						kept = append(kept, point)
+					}
+				}
+				archiveDropped = kept
+			}
 			dropped = append(dropped, archiveDropped...)
 		} else {
 			err = whisper.archiveUpdateMany(archive, currentPoints)
@@ -1084,6 +1107,11 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 		// sidecar, so a retry is safe.
 		if whisper.oooEnabled() {
 			if err := whisper.divertOutOfOrder(dropped); err != nil {
+				return err
+			}
+		}
+		if corrections != nil {
+			if err := whisper.rewriteArchiveCorrections(corrections); err != nil {
 				return err
 			}
 		}
@@ -1164,11 +1192,7 @@ func extractPoints(points []*TimeSeriesPoint, now, maxRetention int) (currentPoi
 	maxAge := now - maxRetention
 	for i, point := range points {
 		if point.Time < maxAge {
-			if i > 0 {
-				return points[:i-1], points[i-1:]
-			} else {
-				return []*TimeSeriesPoint{}, points
-			}
+			return points[:i], points[i:]
 		}
 	}
 	return points, remainingPoints

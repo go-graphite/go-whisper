@@ -305,8 +305,8 @@ func (s *Store) update(ctx context.Context, m Metadata, points []whisper.TimeSer
 			}
 		}
 	} else {
-		// This preserves classic UpdateMany's sort and extractPoints boundary
-		// behaviour, including its historical sparse mixed-age overlap quirk.
+		// This preserves classic UpdateMany's newest-first routing and exact
+		// retention-boundary behaviour.
 		remaining := append([]whisper.TimeSeriesPoint(nil), points...)
 		for i := 0; i < len(remaining)/2; i++ {
 			remaining[i], remaining[len(remaining)-i-1] = remaining[len(remaining)-i-1], remaining[i]
@@ -352,28 +352,40 @@ func extractPoints(points []whisper.TimeSeriesPoint, now, retention int) ([]whis
 	maxAge := now - retention
 	for i, point := range points {
 		if point.Time < maxAge {
-			if i > 0 {
-				return points[:i-1], points[i-1:]
-			}
-			return nil, points
+			return points[:i], points[i:]
 		}
 	}
 	return points, nil
 }
 
 func (s *Store) propagate(reader pebble.Reader, m Metadata, start int, changed map[int]struct{}) error {
-	for archive := start + 1; archive < len(m.Retentions) && len(changed) > 0; archive++ {
-		next := make(map[int]struct{})
-		for timestamp := range changed {
-			wrote, err := s.rollup(reader, m, archive, align(timestamp, m.Retentions[archive].SecondsPerPoint()))
+	// Keep every original interval eligible at each lower archive. A finer
+	// rollup can fail XFF while its lower-resolution bucket is already complete.
+	original := make([]int, 0, len(changed))
+	for timestamp := range changed {
+		original = append(original, timestamp)
+	}
+	sort.Ints(original)
+	for archive := start + 1; archive < len(m.Retentions) && len(original) > 0; archive++ {
+		seen := make(map[int]struct{})
+		propagated := false
+		for _, timestamp := range original {
+			interval := align(timestamp, m.Retentions[archive].SecondsPerPoint())
+			if _, ok := seen[interval]; ok {
+				continue
+			}
+			seen[interval] = struct{}{}
+			wrote, err := s.rollup(reader, m, archive, interval)
 			if err != nil {
 				return err
 			}
 			if wrote {
-				next[align(timestamp, m.Retentions[archive].SecondsPerPoint())] = struct{}{}
+				propagated = true
 			}
 		}
-		changed = next
+		if !propagated {
+			break
+		}
 	}
 	return nil
 }

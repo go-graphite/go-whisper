@@ -268,8 +268,8 @@ func TestOutOfOrderReaderReportsSidecarStatError(t *testing.T) {
 }
 
 // Backfill far enough into the past that UpdateMany routes the point to a
-// coarser archive; it must be diverted against that archive, not re-routed by
-// age into the base archive of the sidecar.
+// coarser archive; its correction must land in that archive, not be re-routed
+// by age into the base archive of the sidecar.
 func TestOutOfOrderBackfillIntoCoarseArchive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "coarse.cwsp")
 	cwhisper, err := CreateWithOptions(
@@ -308,8 +308,8 @@ func TestOutOfOrderBackfillIntoCoarseArchive(t *testing.T) {
 	if err := cwhisper.UpdateMany([]*TimeSeriesPoint{{Time: backfill, Value: 42}}); err != nil {
 		t.Fatalf("backfill: %s", err)
 	}
-	if got := cwhisper.OutOfOrderPoints; got != 1 {
-		t.Fatalf("OutOfOrderPoints = %d; want 1", got)
+	if got := cwhisper.OutOfOrderPoints; got != 0 {
+		t.Fatalf("OutOfOrderPoints = %d; want 0 after synchronous correction", got)
 	}
 
 	ts, err := cwhisper.Fetch(now-600, now-400)
@@ -1143,16 +1143,16 @@ func TestOutOfOrderMergeCascadesFromCoarseArchive(t *testing.T) {
 		t.Fatalf("archive 1 at %d should be empty; test setup is wrong", hole)
 	}
 
-	// backfill the hole: older than archive 1's watermark, so it is diverted
-	// against archive 1. Archive 0 sees nothing at all.
+	// Backfill the hole with an explicit coarse correction. It is rewritten
+	// synchronously, including the cascade. Archive 0 sees nothing at all.
 	if err := cwhisper.UpdateManyForArchive(
 		[]*TimeSeriesPoint{{Time: hole, Value: 1}},
 		cwhisper.archives[1].MaxRetention(),
 	); err != nil {
 		t.Fatalf("backfill: %s", err)
 	}
-	if got := cwhisper.OutOfOrderPoints; got != 1 {
-		t.Fatalf("OutOfOrderPoints = %d; want 1", got)
+	if got := cwhisper.OutOfOrderPoints; got != 0 {
+		t.Fatalf("OutOfOrderPoints = %d; want 0 after synchronous correction", got)
 	}
 
 	if err := cwhisper.MergeOutOfOrder(); err != nil {
