@@ -48,8 +48,9 @@ func newCompactionFixtureWithLateStart(tb testing.TB, lateStart int) compactionF
 			onTime = append(onTime, p)
 		}
 	}
-	// The existing main-file value must win over a conflicting sidecar point.
+	// A later raw-sample correction must survive reads and compaction.
 	late = append(late, &whisper.TimeSeriesPoint{Time: base + lateStart + 2, Value: -1})
+	f.want[lateStart+2] = -1
 	if err := w.UpdateMany(onTime); err != nil {
 		tb.Fatal(err)
 	}
