@@ -184,9 +184,8 @@ func TestOutOfOrderSidecarFillsHole(t *testing.T) {
 	}
 }
 
-// Where the compressed file already holds a value, it stays authoritative: a
-// late correction does not overwrite on-time data.
-func TestOutOfOrderMainWinsOverSidecar(t *testing.T) {
+// A later write to an encoded base-archive sample corrects its stored value.
+func TestOutOfOrderCorrectionOverridesMain(t *testing.T) {
 	cwhisper, _, base := newSingleRetentionOOO(t, true)
 	defer cwhisper.Close()
 
@@ -201,7 +200,7 @@ func TestOutOfOrderMainWinsOverSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch: %s", err)
 	}
-	assertValues(t, ts, []float64{1, math.NaN(), 2, math.NaN(), 3, math.NaN()})
+	assertValues(t, ts, []float64{1, math.NaN(), 99, math.NaN(), 3, math.NaN()})
 }
 
 // A sidecar written by one handle is picked up by the next one, including when
@@ -342,7 +341,7 @@ func TestOutOfOrderMergeIntoCompressedFile(t *testing.T) {
 	cwhisper, path, base := newSingleRetentionOOO(t, true)
 	defer cwhisper.Close()
 
-	// two holes filled late, plus a correction the main file must keep winning
+	// Two holes filled late, plus a correction to an existing encoded sample.
 	if err := cwhisper.UpdateMany([]*TimeSeriesPoint{
 		{Time: base + 1, Value: 7},
 		{Time: base + 3, Value: 8},
@@ -354,7 +353,7 @@ func TestOutOfOrderMergeIntoCompressedFile(t *testing.T) {
 		t.Fatalf("OutOfOrderPoints = %d; want 3", got)
 	}
 
-	want := []float64{1, 7, 2, 8, 3, math.NaN()}
+	want := []float64{1, 7, 99, 8, 3, math.NaN()}
 
 	ts, err := cwhisper.Fetch(base-1, base+5)
 	if err != nil {
@@ -417,8 +416,8 @@ func TestOutOfOrderMergeWithoutSidecar(t *testing.T) {
 // the same shuffled set to a classic file and to a compressed file with a
 // sidecar must produce the same series -- before and after compaction.
 //
-// Timestamps are distinct so that every slot has exactly one true value and the
-// "main file wins" rule cannot mask a lost or misplaced point.
+// Distinct timestamps exercise hole filling; historical_corrections_test.go
+// separately compares repeated writes at the same timestamp with classic Whisper.
 func TestOutOfOrderMatchesClassicWhisper(t *testing.T) {
 	const (
 		span      = 2000
