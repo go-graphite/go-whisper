@@ -1319,27 +1319,30 @@ func (whisper *Whisper) propagate(timestamp int, higher, lower *archiveInfo) (bo
 }
 
 func (whisper *Whisper) readSeries(start, end int64, archive *archiveInfo) ([]dataPoint, error) {
-	var b []byte
-	if start < end {
-		b = make([]byte, end-start)
-		err := whisper.fileReadAt(b, start)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		b = make([]byte, archive.End()-start)
-		err := whisper.fileReadAt(b, start)
-		if err != nil {
-			return nil, err
-		}
-		b2 := make([]byte, end-archive.Offset())
-		err = whisper.fileReadAt(b2, archive.Offset())
-		if err != nil {
-			return nil, err
-		}
-		b = append(b, b2...)
+	b, err := whisper.readSeriesBytes(start, end, archive)
+	if err != nil {
+		return nil, err
 	}
 	return unpackDataPoints(b), nil
+}
+
+func (whisper *Whisper) readSeriesBytes(start, end int64, archive *archiveInfo) ([]byte, error) {
+	if start < end {
+		b := make([]byte, end-start)
+		if err := whisper.fileReadAt(b, start); err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
+	tail := archive.End() - start
+	b := make([]byte, tail+end-archive.Offset())
+	if err := whisper.fileReadAt(b[:tail], start); err != nil {
+		return nil, err
+	}
+	if err := whisper.fileReadAt(b[tail:], archive.Offset()); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 func (whisper *Whisper) checkSeriesEmpty(start, end int64, archive *archiveInfo, fromTime, untilTime int) (bool, error) {
@@ -1514,19 +1517,20 @@ func (whisper *Whisper) fetchFromArchive(archive *archiveInfo, fromTime, untilTi
 		fromOffset := archive.PointOffset(baseInterval, fromInterval)
 		untilOffset := archive.PointOffset(baseInterval, untilInterval)
 
-		series, err = whisper.readSeries(fromOffset, untilOffset, archive)
+		raw, err := whisper.readSeriesBytes(fromOffset, untilOffset, archive)
 		if err != nil {
 			return nil, err
 		}
 
-		values := make([]float64, len(series))
+		values := make([]float64, len(raw)/PointSize)
 		for i := range values {
 			values[i] = math.NaN()
 		}
 		currentInterval := fromInterval
 		step := archive.secondsPerPoint
 
-		for i, dPoint := range series {
+		for i := range values {
+			dPoint := unpackDataPoint(raw[i*PointSize:])
 			if dPoint.interval == currentInterval {
 				values[i] = dPoint.value
 			}
