@@ -102,10 +102,10 @@ func TestOutOfOrderCorrectionRecomputesCompleteAggregate(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertValues(t, ts, []float64{4})
-	// The sidecar's partial sum is 4; retain the complete on-time sum until
-	// compaction can recompute all ten samples as 9*1 + 4 = 13.
-	if got := coarseValueAt(t, w, base); got != 10 {
-		t.Fatalf("coarse before compaction=%v, want 10", got)
+	// Combine the sidecar's correction with the complete window immediately:
+	// the correct sum is 9*1 + 4 = 13, both before and after compaction.
+	if got := coarseValueAt(t, w, base); got != 13 {
+		t.Fatalf("coarse before compaction=%v, want 13", got)
 	}
 	if err := w.MergeOutOfOrder(); err != nil {
 		t.Fatal(err)

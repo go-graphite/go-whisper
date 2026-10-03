@@ -603,11 +603,9 @@ func TestOutOfOrderMergeRecomputesCoarseAggregate(t *testing.T) {
 		t.Fatalf("OutOfOrderPoints = %d; want 1", got)
 	}
 
-	// before the merge the stale aggregate still stands: the encoded slot
-	// cannot be rewritten in place, and the sidecar's own propagated value
-	// loses to the main file
-	if got := coarseValueAt(t, cwhisper, base); got != 9 {
-		t.Errorf("coarse sum at %d = %v; want 9 before the merge", base, got)
+	// Reads combine the correction with the main archive before compaction.
+	if got := coarseValueAt(t, cwhisper, base); got != 10 {
+		t.Errorf("coarse sum at %d = %v; want 10 before the merge", base, got)
 	}
 
 	if err := cwhisper.MergeOutOfOrder(); err != nil {

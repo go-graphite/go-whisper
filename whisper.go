@@ -1032,8 +1032,14 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 	// be diverted to the out-of-order sidecar below instead of being lost
 	var dropped []oooPoint
 	var corrections [][]dataPoint
-	if targetRetention == -1 && !whisper.opts.IgnoreNowOnWrite && whisper.compressedBatchOverlaps(points, now) {
-		return whisper.updateCompressedOverlappingBatch(points)
+	if targetRetention == -1 && !whisper.opts.IgnoreNowOnWrite {
+		overlaps, err := whisper.compressedBatchOverlaps(points, now)
+		if err != nil {
+			return err
+		}
+		if overlaps {
+			return whisper.updateCompressedOverlappingBatch(points)
+		}
 	}
 
 	var currentPoints []*TimeSeriesPoint

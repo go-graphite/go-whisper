@@ -508,14 +508,25 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 				}
 			}
 		}
-		for _, p := range pending {
-			if int(start) <= p.interval && p.interval <= int(end) {
-				dst = append(dst, p)
-			}
-		}
+		// Future buffered rollups can overwrite a requested circular slot.
+		// Include them while resolving slot ownership, then clip the result.
+		dst = append(dst, pending...)
 	}
 
-	return whisper.filterCompressedSlots(archive, dst)
+	if whisper.aggregationMethod == Mix {
+		return dst, nil
+	}
+	dst, err := whisper.filterCompressedSlots(archive, dst)
+	if err != nil {
+		return nil, err
+	}
+	kept := dst[:0]
+	for _, point := range dst {
+		if int(start) <= point.interval && point.interval <= int(end) {
+			kept = append(kept, point)
+		}
+	}
+	return kept, nil
 }
 
 // Blocks can retain more than the logical circular archive. A newer sample
@@ -982,6 +993,20 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 		var pending []extraPoint
 		if extra != nil {
 			pending = extra(i)
+			// Buffered values are served after encoded blocks. Apply the same
+			// replacement precedence there or an old buffer would hide the
+			// corrected value just written into a block during compaction.
+			buffer := nwhisper.archives[i].buffer
+			for _, point := range pending {
+				if !point.replace {
+					continue
+				}
+				for offset := 0; offset < len(buffer); offset += PointSize {
+					if unpackDataPoint(buffer[offset:offset+PointSize]).interval == point.interval {
+						copy(buffer[offset:offset+PointSize], point.dataPoint.Bytes())
+					}
+				}
+			}
 		}
 
 		// Blocks come back ascending by start and each block's points are
@@ -1047,9 +1072,6 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 			}
 		}
 
-		if op != "batch" {
-			nwhisper.archives[i].buffer = archive.buffer
-		}
 	}
 	if err := nwhisper.WriteHeaderCompressed(); err != nil {
 		return fmt.Errorf("%s: failed to write header: %w", op, err)

@@ -317,12 +317,10 @@ func (whisper *Whisper) divertOutOfOrder(dropped []oooPoint) error {
 // The sidecar shares the main file's retentions, so archive i covers the same
 // intervals at the same step and the two value slices are directly aligned.
 // Base-archive sidecar points are later writes, so they replace encoded values.
-// Coarse sidecar points can be partial aggregates: only use those to fill holes
-// until compaction recomputes the complete aggregate from both files.
-//
-// So a diverted point shows up immediately at base resolution, but a coarse
-// window that already holds an aggregate keeps the stale one until
-// MergeOutOfOrder recomputes it - the encoded slot cannot be rewritten in place.
+// Coarse sidecar points can be partial aggregates. Fill holes with those, then
+// recompute affected windows from the union of main data and corrections using
+// the same rules as compaction. An acknowledged correction is visible at every
+// resolution without requiring a file rewrite on the read path.
 func (whisper *Whisper) mergeOutOfOrderValues(archiveIndex, fromTime, untilTime int, values []float64) error {
 	if whisper.oooBroken {
 		return nil
@@ -347,6 +345,27 @@ func (whisper *Whisper) mergeOutOfOrderValues(archiveIndex, fromTime, untilTime 
 	if archiveIndex >= len(sidecar.archives) {
 		return nil
 	}
+	if archiveIndex == 0 {
+		// Fetch represents both an empty slot and an explicit NaN as NaN.
+		// Inspect timestamps so a NaN correction still replaces a main value.
+		archive := sidecar.archives[0]
+		base := sidecar.getBaseInterval(archive)
+		if len(values) == 0 || base == 0 {
+			return nil
+		}
+		from := archive.Interval(fromTime)
+		until := from + len(values)*archive.secondsPerPoint
+		points, err := sidecar.readSeries(archive.PointOffset(base, from), archive.PointOffset(base, until), archive)
+		if err != nil {
+			return fmt.Errorf("fetch out-of-order raw slots: %w", err)
+		}
+		for i, point := range points {
+			if i < len(values) && point.interval == from+i*archive.secondsPerPoint {
+				values[i] = point.value
+			}
+		}
+		return nil
+	}
 
 	ts, err := sidecar.fetchFromArchive(sidecar.archives[archiveIndex], fromTime, untilTime)
 	if err != nil {
@@ -362,6 +381,27 @@ func (whisper *Whisper) mergeOutOfOrderValues(archiveIndex, fromTime, untilTime 
 		}
 		if !math.IsNaN(v) && (archiveIndex == 0 || math.IsNaN(values[i])) {
 			values[i] = v
+		}
+	}
+	if archiveIndex > 0 {
+		extras := make([][]dataPoint, len(whisper.archives))
+		for i := 0; i <= archiveIndex; i++ {
+			extras[i], err = readArchivePoints(sidecar, i)
+			if err != nil {
+				return fmt.Errorf("read out-of-order rollup input: %w", err)
+			}
+		}
+		recomputed, err := whisper.recomputeAggregates(extras)
+		if err != nil {
+			return fmt.Errorf("recompute out-of-order read: %w", err)
+		}
+		archive := whisper.archives[archiveIndex]
+		from := archive.Interval(fromTime)
+		for _, point := range recomputed[archiveIndex] {
+			index := (point.interval - from) / archive.secondsPerPoint
+			if point.interval >= from && index < len(values) {
+				values[index] = point.value
+			}
 		}
 	}
 
@@ -650,7 +690,10 @@ func (whisper *Whisper) mergedArchiveValues(index int, sidecar, recomputed []dat
 		until = archive.AggregateInterval(until) + archive.next.secondsPerPoint - archive.secondsPerPoint
 	}
 
-	series, err := whisper.storedPoints(archive, from, until)
+	// The shared live-rollup reader applies XFF and includes buffered tail
+	// windows. They are necessary when a correction cascades past a coarse
+	// archive whose final values have not yet reached encoded blocks.
+	series, err := whisper.fetchCompressed(int64(from), int64(until), archive)
 	if err != nil {
 		return nil, fmt.Errorf("recompute aggregates: read archive %d: %w", index, err)
 	}
@@ -728,14 +771,8 @@ func markExtras(points []dataPoint, replace bool) []extraPoint {
 //
 // This is fetchCompressed without its tail. For a non-base archive that
 // function also live aggregates whatever sits in the higher archives' buffers,
-// which is not what the file holds: it ignores xFilesFactor and drops its own
-// trailing group. Feeding those phantom values into an aggregation would inflate
-// the known-slot count and could fold a partial aggregate into a stored one.
-//
-// No reachable case is known - a diverted point is by construction older than
-// the buffers that would pollute it - but that argument rests on the ratio
-// between every adjacent pair of retentions, which callers choose. Reading
-// exactly what the file holds costs a few lines and does not.
+// which need not be physically present in the selected archive. Migration and
+// archive snapshots use this helper to preserve only the stored records.
 func (whisper *Whisper) storedPoints(archive *archiveInfo, from, until int) ([]dataPoint, error) {
 	var dst []dataPoint
 

@@ -29,16 +29,25 @@ func (whisper *Whisper) materializeCompressedRollups() error {
 	return whisper.rewrite(rets, "batch", func(i int) []extraPoint { return extras[i] })
 }
 
-// compressedBatchOverlaps reports a cross-resolution circular-slot collision.
-// Buffering propagation until read time cannot preserve the write order when
-// a later explicit coarse write replaces a freshly propagated finer sample.
-func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now int) bool {
+// compressedBatchOverlaps reports circular-slot collisions whose write order
+// cannot be preserved by deferred propagation or sidecar timestamp precedence.
+func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now int) (bool, error) {
 	if !whisper.compressed || whisper.aggregationMethod == Mix {
-		return false
+		return false, nil
+	}
+	var sidecar *Whisper
+	if whisper.oooPath != "" {
+		var err error
+		sidecar, err = whisper.oooSidecar(false)
+		if err != nil {
+			return false, err
+		}
 	}
 	var finer []*TimeSeriesPoint
 	remaining := points
-	for _, archive := range whisper.archives {
+	latest := 0
+	future := len(points) > 0 && points[0].Time > now
+	for index, archive := range whisper.archives {
 		current, rest := extractPoints(remaining, now, archive.MaxRetention())
 		remaining = rest
 		slots := make(map[int]int, len(finer))
@@ -49,16 +58,73 @@ func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now i
 		for _, point := range current {
 			interval := point.Time - mod(point.Time, archive.secondsPerPoint)
 			if previous, ok := slots[mod(interval/archive.secondsPerPoint, archive.numberOfPoints)]; ok && previous != interval {
-				return true
+				return true, nil
 			}
 		}
 		finer = append(finer, current...)
+		// Include finer buffers in the bound: their virtual aggregates may be
+		// newer than this archive's encoded watermark.
+		_, end := archive.getRange()
+		if end > latest {
+			latest = end
+		}
+		for offset := 0; offset < len(archive.buffer); offset += PointSize {
+			if interval := unpackInt(archive.buffer[offset:]); interval > latest {
+				latest = interval
+			}
+		}
+		if len(finer) == 0 || (!whisper.oooEnabled() && sidecar == nil && !future) {
+			continue
+		}
+		intervals := make(map[int]int, len(finer))
+		oldest := maxInt
+		for _, point := range finer {
+			interval := point.Time - mod(point.Time, archive.secondsPerPoint)
+			intervals[mod(interval/archive.secondsPerPoint, archive.numberOfPoints)] = interval
+			if interval < oldest {
+				oldest = interval
+			}
+		}
+		if sidecar != nil {
+			sa := sidecar.archives[index]
+			base := sidecar.getBaseInterval(sa)
+			if base != 0 {
+				var raw [PointSize]byte
+				for _, interval := range intervals {
+					if err := sidecar.fileReadAt(raw[:], sa.PointOffset(base, interval)); err != nil {
+						return false, err
+					}
+					previous := unpackInt(raw[:])
+					if previous != 0 && previous != interval {
+						return true, nil
+					}
+				}
+			}
+		}
+		if future || (whisper.oooEnabled() && latest >= oldest+archive.MaxRetention()) {
+			from := oldest + archive.MaxRetention()
+			if future {
+				from = 1
+			}
+			stored, err := whisper.fetchCompressed(int64(from), int64(maxInt), archive)
+			if err != nil {
+				return false, err
+			}
+			for _, point := range stored {
+				slot := mod(point.interval/archive.secondsPerPoint, archive.numberOfPoints)
+				if interval, ok := intervals[slot]; ok && point.interval != interval && (future || point.interval > interval) {
+					return true, nil
+				}
+			}
+		}
 	}
-	return false
+	return false, nil
 }
 
 // updateCompressedOverlappingBatch uses the classic circular write/propagation
-// order for an exceptional batch that overlaps slots across resolutions. The
+// order for an exceptional batch that overlaps slots across resolutions or
+// between the compressed file and its sidecar. The sidecar has no sequence
+// number to order different timestamps occupying the same circular slot. The
 // scratch file is in memory; only the finished compressed replacement is
 // published, under the caller's existing path lock. Ordinary writes keep the
 // incremental compressed path.
