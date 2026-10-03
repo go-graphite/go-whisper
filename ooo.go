@@ -776,10 +776,13 @@ func markExtras(points []dataPoint, replace bool) []extraPoint {
 func (whisper *Whisper) storedPoints(archive *archiveInfo, from, until int) ([]dataPoint, error) {
 	var dst []dataPoint
 
-	buf := make([]byte, archive.blockSize)
+	var buf []byte
 	for _, block := range archive.getSortedBlockRanges() {
-		if block.end < from || until < block.start {
+		if block.start == 0 || block.end < from || until < block.start {
 			continue
+		}
+		if buf == nil {
+			buf = make([]byte, archive.blockSize)
 		}
 		if err := whisper.fileReadAt(buf, int64(archive.blockOffset(block.index))); err != nil {
 			return nil, fmt.Errorf("read block %d: %w", block.index, err)
@@ -790,13 +793,11 @@ func (whisper *Whisper) storedPoints(archive *archiveInfo, from, until int) ([]d
 			return nil, fmt.Errorf("read block %d: %w", block.index, err)
 		}
 
-		for i := range buf {
-			buf[i] = 0
-		}
 	}
 
 	if archive.hasBuffer() {
-		for _, p := range unpackDataPoints(archive.buffer) {
+		for offset := 0; offset < len(archive.buffer); offset += PointSize {
+			p := unpackDataPoint(archive.buffer[offset:])
 			if p.interval != 0 && from <= p.interval && p.interval <= until {
 				dst = append(dst, p)
 			}
