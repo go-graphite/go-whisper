@@ -444,12 +444,14 @@ func (s *Store) Fetch(ctx context.Context, name string, fromTime, untilTime int)
 	step := m.Retentions[archive].SecondsPerPoint()
 	from := interval(fromTime, step)
 	until := interval(untilTime, step)
-	hasPoints, err := hasArchivePoint(snapshot, m, archive)
-	if err != nil {
-		return nil, err
-	}
-	if from == until && hasPoints {
-		until += step
+	if from == until {
+		hasPoints, err := hasArchivePoint(snapshot, m, archive)
+		if err != nil {
+			return nil, err
+		}
+		if hasPoints {
+			until += step
+		}
 	}
 	values, err := getRange(snapshot, m, archive, from, until)
 	if err != nil {
