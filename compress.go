@@ -64,7 +64,25 @@ func Debug(compress, bitsWrite bool) {
 }
 
 func (whisper *Whisper) WriteHeaderCompressed() (err error) {
-	b := make([]byte, whisper.MetadataSize())
+	scratch := compressedHeaderScratch.Get().(*[]byte)
+	b := *scratch
+	size := whisper.MetadataSize()
+	if cap(b) < size {
+		b = make([]byte, size)
+	}
+	b = b[:size]
+	// Reserved fields and the CRC placeholder must start at zero when
+	// reusing storage that previously held a different file's header.
+	for i := range b {
+		b[i] = 0
+	}
+	defer func() {
+		if cap(b) > 64*1024 {
+			b = nil
+		}
+		*scratch = b[:0]
+		compressedHeaderScratch.Put(scratch)
+	}()
 	i := 0
 
 	// magic string

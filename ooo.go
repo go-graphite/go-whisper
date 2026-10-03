@@ -774,10 +774,36 @@ func markExtras(points []dataPoint, replace bool) []extraPoint {
 // which need not be physically present in the selected archive. Migration and
 // archive snapshots use this helper to preserve only the stored records.
 func (whisper *Whisper) storedPoints(archive *archiveInfo, from, until int) ([]dataPoint, error) {
+	blocks := archive.getSortedBlockRanges()
+	capacity := 0
+	for _, block := range blocks {
+		if block.start == 0 || block.end < from || until < block.start {
+			continue
+		}
+		first, last := block.start, block.end
+		if first < from {
+			first = from
+		}
+		if last > until {
+			last = until
+		}
+		count := (last-first)/archive.secondsPerPoint + 1
+		// Metadata is only a capacity hint; malformed counts cannot force
+		// allocations larger than the block's maximum encoded capacity.
+		if block.count >= 0 && block.count < maxInt && block.count/4 < archive.blockSize && count > block.count+1 {
+			count = block.count + 1
+		}
+		if count > archive.numberOfPoints-capacity {
+			count = archive.numberOfPoints - capacity
+		}
+		capacity += count
+	}
 	var dst []dataPoint
-
+	if capacity > 0 {
+		dst = make([]dataPoint, 0, capacity)
+	}
 	var buf []byte
-	for _, block := range archive.getSortedBlockRanges() {
+	for _, block := range blocks {
 		if block.start == 0 || block.end < from || until < block.start {
 			continue
 		}
