@@ -249,8 +249,8 @@ func TestOpenFile(t *testing.T) {
 }
 
 /*
-  Test the full cycle of creating a whisper file, adding some
-  data points to it and then fetching a time series.
+Test the full cycle of creating a whisper file, adding some
+data points to it and then fetching a time series.
 */
 func testCreateUpdateFetch(t *testing.T, aggregationMethod AggregationMethod, xFilesFactor float32, secondsAgo, fromAgo, fetchLength, step int, currentValue, increment float64) *TimeSeries {
 	var whisper *Whisper
@@ -876,6 +876,12 @@ var keepUpdateConfigTestData = flag.Bool("keep-update-config-test-data", false, 
 
 // TODO: mix aggregation policy
 func TestUpdateConfig(t *testing.T) {
+	// A clock tick between selecting the old and new archive can change
+	// the resolution of an exact-retention query during migration.
+	previousNow := Now
+	now := Now()
+	Now = func() time.Time { return now }
+	defer func() { Now = previousNow }()
 	for _, c := range []struct {
 		oldRets        string
 		newRets        string

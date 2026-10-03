@@ -1032,6 +1032,9 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 	// be diverted to the out-of-order sidecar below instead of being lost
 	var dropped []oooPoint
 	var corrections [][]dataPoint
+	if targetRetention == -1 && !whisper.opts.IgnoreNowOnWrite && whisper.compressedBatchOverlaps(points, now) {
+		return whisper.updateCompressedOverlappingBatch(points)
+	}
 
 	var currentPoints []*TimeSeriesPoint
 	for i := 0; i < len(whisper.archives); i++ {
@@ -1436,6 +1439,23 @@ func (whisper *Whisper) fetchFromArchive(archive *archiveInfo, fromTime, untilTi
 
 	var series []dataPoint
 	if whisper.compressed {
+		if fromInterval == untilInterval {
+			// Classic expands an aligned zero-width query only when the
+			// selected archive is nonempty, even outside the queried slot.
+			all, err := whisper.fetchCompressed(1, int64(maxInt), archive)
+			if err != nil {
+				return nil, err
+			}
+			populated := len(all) != 0
+			if sidecar, err := whisper.oooSidecar(false); err != nil {
+				return nil, err
+			} else if sidecar != nil {
+				populated = populated || sidecar.getBaseInterval(sidecar.archives[whisper.archiveIndexOf(archive)]) != 0
+			}
+			if populated {
+				untilInterval += archive.secondsPerPoint
+			}
+		}
 		series, err = whisper.fetchCompressed(int64(fromInterval), int64(untilInterval), archive)
 		if err != nil {
 			return nil, err
@@ -1976,10 +1996,18 @@ func (whisper *Whisper) UpdateConfig(rets Retentions, aggr AggregationMethod, xf
 	}
 
 	if updateAggrXff {
+		if whisper.compressed && whisper.aggregationMethod != Mix {
+			if err := whisper.materializeCompressedRollups(); err != nil {
+				return err
+			}
+		}
 		// no need to create a new whisper file, just do in-place update
 		// for aggregations and xff. histories won't be changed.
 		whisper.xFilesFactor = xff
 		whisper.aggregationMethod = aggr
+		if whisper.compressed {
+			return whisper.WriteHeaderCompressed()
+		}
 
 		aggData := make([]byte, IntSize)
 		packInt(aggData, int(whisper.aggregationMethod), 0)
