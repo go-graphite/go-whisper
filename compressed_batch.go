@@ -69,7 +69,14 @@ func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now i
 			latest = end
 		}
 		for offset := 0; offset < len(archive.buffer); offset += PointSize {
-			if interval := unpackInt(archive.buffer[offset:]); interval > latest {
+			interval := unpackInt(archive.buffer[offset:])
+			// A rewritten partial window may acquire a newer aggregate in
+			// its buffer. Preserve that replacement before flushing would
+			// demote it to a gap-filling coarse sidecar value.
+			if index > 0 && interval != 0 && interval <= archive.cblock.pn1.interval {
+				return true, nil
+			}
+			if interval > latest {
 				latest = interval
 			}
 		}

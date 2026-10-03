@@ -709,6 +709,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 			continue
 		}
 
+		previousEnd := archive.cblock.pn1.interval
 		if _, err := archive.appendToBlockAndRotate(dps); err != nil {
 			// TODO: record and continue?
 			return dropped, err
@@ -717,6 +718,18 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 		// propagate
 		lower := archive.next
 		lowerIntervalStart := archive.AggregateInterval(dps[0].interval)
+		// A rewrite can encode the beginning of an unfinished window. When
+		// its remaining buffer is flushed, aggregate the whole stored window.
+		if previousEnd >= lowerIntervalStart {
+			dps, err = whisper.storedPoints(archive, lowerIntervalStart, lowerIntervalStart+lower.secondsPerPoint-archive.secondsPerPoint)
+			if err != nil {
+				return dropped, err
+			}
+			dps, err = whisper.filterCompressedSlots(archive, dps)
+			if err != nil {
+				return dropped, err
+			}
+		}
 
 		var knownValues []float64
 		for _, dPoint := range dps {

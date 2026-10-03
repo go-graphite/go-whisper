@@ -869,9 +869,10 @@ func readArchivePointsAt(w *Whisper, index int, now time.Time) ([]dataPoint, err
 	}
 	buf := make([]byte, bufferSize)
 
-	// a classic archive is a ring buffer: unwritten slots are zero, and slots
-	// not yet overwritten since the last wrap hold points older than retention
-	oldest := int(now.Unix()) - archive.MaxRetention()
+	// Fine corrections can outlive their own retention while still affecting
+	// retained coarse aggregates. Keep those raw slots until all resolutions
+	// expire; collision replay materializes them before a slot is overwritten.
+	oldest := int(now.Unix()) - w.maxRetention
 
 	var points []dataPoint
 	for offset := 0; offset < archive.Size(); {
