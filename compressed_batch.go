@@ -103,6 +103,12 @@ func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now i
 					}
 					previous := unpackInt(raw[:])
 					if previous != 0 && previous != interval {
+						// With no coarse archives, an expired sidecar alias has
+						// no remaining observable value to materialize. Multi-
+						// archive files must preserve its retained rollups first.
+						if len(whisper.archives) == 1 && previous < now-archive.MaxRetention() && previous < interval {
+							continue
+						}
 						return true, nil
 					}
 				}

@@ -207,3 +207,53 @@ func TestOutOfOrderRollupsSurviveRetentionWrap(t *testing.T) {
 		}
 	}
 }
+
+func TestOutOfOrderRangeReadsMatchPhysicalSlots(t *testing.T) {
+	now := correctnessClock(t)
+	w := correctnessFile(t, false, "1s:20s,5s:1m", 0)
+	for index, archive := range w.archives {
+		input := []TimeSeriesPoint{}
+		for i := 0; i < archive.numberOfPoints*3; i++ {
+			if i%7 == 0 {
+				continue
+			}
+			input = append(input, TimeSeriesPoint{Time: *now - 2*archive.MaxRetention() + i*archive.secondsPerPoint, Value: float64(i)})
+		}
+		if err := w.ReplaceArchivePoints(index, input); err != nil {
+			t.Fatal(err)
+		}
+		physical, err := w.ArchivePoints(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for from := *now - archive.MaxRetention()*2; from < *now+archive.MaxRetention(); from += 3 {
+			for _, width := range []int{-1, 0, 1, 4, 13, 19, 20, 21, 90} {
+				until := from + width
+				got, err := readArchivePointsInRange(w, index, from, until)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want []dataPoint
+				for _, p := range physical {
+					if p.Time >= from && p.Time <= until {
+						want = append(want, dataPoint{p.Time, p.Value})
+					}
+				}
+				if len(got) != len(want) {
+					t.Fatalf("archive=%d range=%d:%d got=%v want=%v", index, from, until, got, want)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("got=%v want=%v", got, want)
+					}
+				}
+			}
+		}
+		// A historical snapshot horizon before Unix epoch zero must not overflow
+		// the width calculation when the upper bound is maxInt.
+		got, err := readArchivePointsInRange(w, index, -100, maxInt)
+		if err != nil || len(got) != len(physical) {
+			t.Fatalf("historical range: got=%v err=%v", got, err)
+		}
+	}
+}
