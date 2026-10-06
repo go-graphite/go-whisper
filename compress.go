@@ -942,8 +942,9 @@ func (whisper *Whisper) computeExtendedRetentions() (rets []*Retention, extend b
 // rewrite rebuilds the whole compressed file under the given retentions by
 // streaming populated blocks into a sibling temp file, which is then renamed
 // into place. Compaction can copy unchanged leading blocks without decoding.
-// op names the operation and its temp suffix
-// ("extend", "compact").
+// op names the operation and its temp suffix ("extend", "compact", "rollup",
+// "batch", "grow"). "rollup" additionally clears a buffered slot whose replace
+// point is now encoded, so a later flush cannot divert it as a gap fill.
 //
 // extra optionally supplies additional points to merge into archive i as it is
 // rewritten. They must be sorted ascending by interval. Where an interval is
@@ -1025,7 +1026,7 @@ func (whisper *Whisper) rewrite(rets []*Retention, op string, extra func(archive
 				}
 				for offset := 0; offset < len(buffer); offset += PointSize {
 					if unpackDataPoint(buffer[offset:offset+PointSize]).interval == point.interval {
-						if op == "rollup" && point.interval <= archive.cblock.pn1.interval {
+						if op == "rollup" && archive.bufferedBehindWatermark(point.interval) {
 							// This replacement and its downstream rollups are now
 							// encoded. A later flush must not divert it as a gap fill.
 							for j := offset; j < offset+PointSize; j++ {

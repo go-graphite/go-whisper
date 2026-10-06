@@ -23,7 +23,7 @@ func benchmarkCompressedPartialRollupContinuation(b *testing.B, method Aggregati
 	previousNow := Now
 	Now = func() time.Time { return time.Unix(int64(now), 0) }
 	b.Cleanup(func() { Now = previousNow })
-	// The same four archive grids seen on affected secondly files on 6301.
+	// The four archive grids seen on affected production secondly files.
 	rets := MustParseRetentionDefs("1s:1d,1m:30d,1h:1y,1d:10y")
 	path := filepath.Join(b.TempDir(), "metric.wsp")
 	opts := &Options{Compressed: true, OutOfOrder: true, FLock: true}
