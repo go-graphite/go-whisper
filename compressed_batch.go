@@ -90,6 +90,8 @@ func (whisper *Whisper) materializeCompressedRollups() error {
 
 // compressedBatchOverlaps reports circular-slot collisions whose write order
 // cannot be preserved by deferred propagation or sidecar timestamp precedence.
+//
+// skipcq: GO-R1005
 func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now int) (bool, error) {
 	if !whisper.compressed || whisper.aggregationMethod == Mix {
 		return false, nil
@@ -152,29 +154,8 @@ func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now i
 			}
 		}
 		if sidecar != nil {
-			sa := sidecar.archives[index]
-			base := sidecar.getBaseInterval(sa)
-			if base != 0 {
-				batch := make([]int, 0, len(intervals))
-				for _, interval := range intervals {
-					batch = append(batch, interval)
-				}
-				stored, err := sidecar.readSlotIntervals(sa, base, batch)
-				if err != nil {
-					return false, err
-				}
-				for i, interval := range batch {
-					previous := stored[i]
-					if previous != 0 && previous != interval {
-						// With no coarse archives, an expired sidecar alias has
-						// no remaining observable value to materialize. Multi-
-						// archive files must preserve its retained rollups first.
-						if len(whisper.archives) == 1 && previous < now-archive.MaxRetention() && previous < interval {
-							continue
-						}
-						return true, nil
-					}
-				}
+			if collides, err := whisper.sidecarSlotsCollide(sidecar, index, intervals, now); err != nil || collides {
+				return collides, err
 			}
 		}
 		if future || (whisper.oooEnabled() && latest >= oldest+archive.MaxRetention()) {
@@ -193,6 +174,39 @@ func (whisper *Whisper) compressedBatchOverlaps(points []*TimeSeriesPoint, now i
 				}
 			}
 		}
+	}
+	return false, nil
+}
+
+// sidecarSlotsCollide reports whether the sidecar archive at index holds a
+// different timestamp in the slot of any of intervals, keyed by slot.
+func (whisper *Whisper) sidecarSlotsCollide(sidecar *Whisper, index int, intervals map[int]int, now int) (bool, error) {
+	sa := sidecar.archives[index]
+	base := sidecar.getBaseInterval(sa)
+	if base == 0 {
+		return false, nil
+	}
+	batch := make([]int, 0, len(intervals))
+	for _, interval := range intervals {
+		batch = append(batch, interval)
+	}
+	stored, err := sidecar.readSlotIntervals(sa, base, batch)
+	if err != nil {
+		return false, err
+	}
+	retention := whisper.archives[index].MaxRetention()
+	for i, interval := range batch {
+		previous := stored[i]
+		if previous == 0 || previous == interval {
+			continue
+		}
+		// With no coarse archives, an expired sidecar alias has no remaining
+		// observable value to materialize. Multi-archive files must preserve
+		// its retained rollups first.
+		if len(whisper.archives) == 1 && previous < now-retention && previous < interval {
+			continue
+		}
+		return true, nil
 	}
 	return false, nil
 }
