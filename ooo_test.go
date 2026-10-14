@@ -981,10 +981,10 @@ func TestOutOfOrderLongFilenameWithFLock(t *testing.T) {
 			if _, err := os.Stat(sidecarPath); err != nil {
 				t.Fatalf("stat sidecar: %s", err)
 			}
-			if _, err := os.Stat(auxiliaryPath(path, lockSuffix)); err != nil {
+			if _, err := os.Stat(PathLockPath(path)); err != nil {
 				t.Fatalf("stat main lock: %s", err)
 			}
-			if _, err := os.Stat(auxiliaryPath(sidecarPath, lockSuffix)); err != nil {
+			if _, err := os.Stat(PathLockPath(sidecarPath)); err != nil {
 				t.Fatalf("stat sidecar lock: %s", err)
 			}
 
