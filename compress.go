@@ -2246,9 +2246,14 @@ func (dstw *Whisper) FillCompressed(srcw *Whisper) error {
 		return err
 	}
 
-	f := dstw.file
+	// Replacing the receiver must not lose its sidecar or persistent path lock.
+	if err := dstw.closeOOO(); err != nil {
+		return err
+	}
+	f, lockFile := dstw.file, dstw.lockFile
 	*dstw = *newDst
 	dstw.file = f
+	dstw.lockFile = lockFile
 
 	return nil
 }
