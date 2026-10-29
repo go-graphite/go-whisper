@@ -414,7 +414,7 @@ func nativePathLockHelper(t *testing.T) {
 		t.Fatal("missing GO_WHISPER_LOCK_PATH")
 	}
 	// Verify the separate process is excluded even after the data inode changed.
-	lock, err := acquirePathLock(path, syscall.LOCK_EX|syscall.LOCK_NB)
+	lock, err := acquirePathLock(path, syscall.LOCK_EX|syscall.LOCK_NB, false)
 	if lock != nil {
 		_ = lock.Close()
 	}

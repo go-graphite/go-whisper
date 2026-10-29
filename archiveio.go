@@ -1,11 +1,11 @@
 package whisper
 
 import (
+	"cmp"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -14,6 +14,13 @@ import (
 // The caller must ensure the source is quiesced while it is copied.
 // When no compressed sidecar exists, it returns path and a no-op cleanup.
 func OfflineMergeOutOfOrderSnapshot(path string) (string, func(), error) {
+	return OfflineMergeOutOfOrderSnapshotIn(path, "")
+}
+
+// OfflineMergeOutOfOrderSnapshotIn chooses the parent of private snapshot
+// directories. A writable directory on the source filesystem permits reflinks
+// and avoids expanding sparse OOO sidecars on a separate temporary filesystem.
+func OfflineMergeOutOfOrderSnapshotIn(path, directory string) (string, func(), error) {
 	readOnly := os.O_RDONLY
 	w, err := OpenWithOptions(path, &Options{OpenFileFlag: &readOnly})
 	if err != nil {
@@ -30,7 +37,7 @@ func OfflineMergeOutOfOrderSnapshot(path string) (string, func(), error) {
 	if !compressed || sidecar == "" {
 		return path, func() {}, nil
 	}
-	dir, err := os.MkdirTemp("", "go-whisper-ooo-snapshot-")
+	dir, err := os.MkdirTemp(directory, "go-whisper-ooo-snapshot-")
 	if err != nil {
 		return "", nil, fmt.Errorf("create snapshot directory: %w", err)
 	}
@@ -74,7 +81,7 @@ func copyFile(source, destination string) error {
 	if err != nil {
 		return fmt.Errorf("create snapshot output %s: %w", destination, err)
 	}
-	_, copyErr := io.Copy(out, in)
+	copyErr := copySnapshotContents(out, in)
 	closeErr := out.Close()
 	if copyErr != nil {
 		return fmt.Errorf("copy snapshot %s: %w", source, copyErr)
@@ -89,6 +96,19 @@ func copyFile(source, destination string) error {
 // timestamp. Unlike Fetch, it does not consult Now: it is intended for
 // archive-preserving migration of historical files.
 func (whisper *Whisper) ArchivePoints(index int) ([]TimeSeriesPoint, error) {
+	return whisper.archivePoints(index, false)
+}
+
+// ArchivePointsWithRollups includes the values computed from compressed archive
+// buffers during Fetch. It is intended for migration into an engine that stores
+// these rollups eagerly. The caller must quiesce the source and use
+// OfflineMergeOutOfOrderSnapshot first, so sidecar corrections are folded into
+// the private copy before rollups are evaluated.
+func (whisper *Whisper) ArchivePointsWithRollups(index int) ([]TimeSeriesPoint, error) {
+	return whisper.archivePoints(index, true)
+}
+
+func (whisper *Whisper) archivePoints(index int, includeRollups bool) ([]TimeSeriesPoint, error) {
 	if index < 0 || index >= len(whisper.archives) {
 		return nil, fmt.Errorf("archive index %d out of range", index)
 	}
@@ -98,7 +118,13 @@ func (whisper *Whisper) ArchivePoints(index int) ([]TimeSeriesPoint, error) {
 		}
 		// Read only physically stored blocks and buffers. fetchCompressed adds
 		// live aggregate tail values that are not archive-preserving.
-		points, err := whisper.storedPoints(whisper.archives[index], 1, maxInt)
+		var points []dataPoint
+		var err error
+		if includeRollups {
+			points, err = whisper.fetchCompressed(1, int64(maxInt), whisper.archives[index])
+		} else {
+			points, err = whisper.storedPoints(whisper.archives[index], 1, maxInt)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("read compressed archive %d: %w", index, err)
 		}
@@ -125,22 +151,21 @@ func (whisper *Whisper) ArchivePoints(index int) ([]TimeSeriesPoint, error) {
 		for timestamp, value := range byTime {
 			result = append(result, TimeSeriesPoint{Time: timestamp, Value: value})
 		}
-		sort.Slice(result, func(i, j int) bool { return result[i].Time < result[j].Time })
+		// byTime already resolved duplicate timestamps. Typed swaps avoid the
+		// reflection cost of sorting every complete archive during migration.
+		slices.SortFunc(result, func(a, b TimeSeriesPoint) int { return cmp.Compare(a.Time, b.Time) })
 		return result, nil
 	}
-	archive := whisper.archives[index]
-	buf := make([]byte, archive.Size())
-	if err := whisper.fileReadAt(buf, archive.Offset()); err != nil {
-		return nil, fmt.Errorf("read archive %d: %w", index, err)
+	// Reuse the bounded, extent-aware classic reader. Virtual sidecars can
+	// contain only a few points even with years of logical retention.
+	stored, err := readArchivePointsInRange(whisper, index, 0, maxInt)
+	if err != nil {
+		return nil, err
 	}
-	points := make([]TimeSeriesPoint, 0, archive.numberOfPoints)
-	for offset := 0; offset < len(buf); offset += PointSize {
-		point := unpackDataPoint(buf[offset : offset+PointSize])
-		if point.interval > 0 {
-			points = append(points, TimeSeriesPoint{Time: point.interval, Value: point.value})
-		}
+	points := make([]TimeSeriesPoint, len(stored))
+	for i, point := range stored {
+		points[i] = TimeSeriesPoint{Time: point.interval, Value: point.value}
 	}
-	sort.Slice(points, func(i, j int) bool { return points[i].Time < points[j].Time })
 	return points, nil
 }
 
