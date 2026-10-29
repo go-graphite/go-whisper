@@ -396,14 +396,10 @@ func TestCompressedWhisperReadWrite2(t *testing.T) {
 var fullTest3 = flag.Bool("full-test3", false, "run a full test of TestCompressedWhisperReadWrite3")
 var cacheTest3Data = flag.Bool("debug-test3", false, "save a data of TestCompressedWhisperReadWrite3 for debugging")
 
-// To run a full test of TestCompressedWhisperReadWrite3, it would take about 10
-// minutes, the slowness comes from standard whisper file propagation (around 10
-// times slower and comsume much more memory than compressed format).
-//
-// Parallel is disabled because we need to manipulate Now in order to simulate
-// updates.
-//
-// TODO: cache data to make failed tests repeatable and easier to debug
+// Sparse cases cover the full retention span. Dense cases cross the base
+// archive wrap and coarse rollup windows by default; -full-test3 extends them
+// across the original two-year span. Every case compares with classic Whisper.
+// Subtests stay serial because they replace the package-global Now hook.
 func TestCompressedWhisperReadWrite3(t *testing.T) {
 	// TODO: add a test case of mixing random and sequential values/times
 	inputs := []struct {
@@ -452,7 +448,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			},
 		},
 
-		// these are slow tests, turned off by default
+		// Dense streams use a bounded default span; the flag enables the full span.
 		{
 			name:     "random_value",
 			fullTest: func() bool { return *fullTest3 },
@@ -496,9 +492,11 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// t.Parallel()
 			t.Logf("case: %s\n", input.name)
 
-			fpath := fmt.Sprintf("tmp/test3_%s.wsp", input.name)
-			os.Remove(fpath)
-			os.Remove(fpath + ".cwsp")
+			fpath := filepath.Join(t.TempDir(), "test3.wsp")
+			t.Cleanup(func() {
+				releaseMemFile(fpath)
+				releaseMemFile(fpath + ".cwsp")
+			})
 
 			var dataDebugFile *os.File
 			if *cacheTest3Data {
@@ -543,6 +541,10 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// var now = time.Now()
 			var now = time.Unix(1589720099, 0)
 			var total = 60*60*24*365*2 + 37
+			if !input.fullTest() {
+				// Wrap the two-day base archive and finish two hourly windows.
+				total = 2*86400 + 2*3600 + 37
+			}
 			var start = now.Add(time.Second * time.Duration(total) * -1)
 			Now = func() time.Time { return start }
 			defer func() { Now = time.Now }()
@@ -587,27 +589,25 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 						extended++
 					}
 
-					if input.fullTest() {
-						if *cacheTest3Data {
-							// if _, err := fmt.Fprintf(dataDebugFile, "%d\n", len(ps)); err != nil {
-							// 	t.Fatal(err)
-							// }
-							for _, p := range ps {
-								if _, err := fmt.Fprintf(dataDebugFile, "%d %d %d %v\n", p.Time, p.Time-mod(p.Time, 60), p.Time-mod(p.Time, 3600), p.Value); err != nil {
-									t.Fatal(err)
-								}
+					if *cacheTest3Data {
+						// if _, err := fmt.Fprintf(dataDebugFile, "%d\n", len(ps)); err != nil {
+						// 	t.Fatal(err)
+						// }
+						for _, p := range ps {
+							if _, err := fmt.Fprintf(dataDebugFile, "%d %d %d %v\n", p.Time, p.Time-mod(p.Time, 60), p.Time-mod(p.Time, 3600), p.Value); err != nil {
+								t.Fatal(err)
 							}
 						}
-						ncwhisper, err = OpenWithOptions(fpath, &Options{InMemory: inMemory})
-						if err != nil {
-							t.Fatal(err)
-						}
-						if err := ncwhisper.UpdateMany(ps); err != nil {
-							t.Fatal(err)
-						}
-						if err := ncwhisper.Close(); err != nil {
-							t.Fatal(err)
-						}
+					}
+					ncwhisper, err = OpenWithOptions(fpath, &Options{InMemory: inMemory})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := ncwhisper.UpdateMany(ps); err != nil {
+						t.Fatal(err)
+					}
+					if err := ncwhisper.Close(); err != nil {
+						t.Fatal(err)
 					}
 
 					ps = ps[:0]
@@ -645,15 +645,13 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// 	}
 			// }
 
-			if input.fullTest() {
-				t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp")
-				// output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
-				output, err := Compare(fpath, fpath+".cwsp", int(now.Unix()), false, "", false, false, 2)
+			t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp")
+			// output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
+			output, err := Compare(fpath, fpath+".cwsp", int(now.Unix()), false, "", false, false, 2)
 
-				if err != nil {
-					t.Log(string(output))
-					t.Error(err)
-				}
+			if err != nil {
+				t.Log(string(output))
+				t.Error(err)
 			}
 
 			std, err := os.Stat(fpath)
