@@ -1838,3 +1838,18 @@ func TestRewriteKeepsFlockAcrossRename(t *testing.T) {
 	}
 	t.Fatal("concurrent write was lost during rewrite")
 }
+
+func TestRewriteReleasesMemoryTemporaryAfterFailure(t *testing.T) {
+	w, path, _ := newSingleRetentionOOO(t, false)
+	defer w.Close()
+	if err := w.file.(*os.File).Truncate(int64(w.MetadataSize())); err != nil {
+		t.Fatal(err)
+	}
+	rets, _, _ := w.computeExtendedRetentions()
+	if _, _, _, err := w.buildRewrite(rets, "compact", nil, true); err == nil {
+		t.Fatal("rewrite of a truncated file returned no error")
+	}
+	if _, ok := memFiles.Load(auxiliaryPath(path, ".compact")); ok {
+		t.Fatal("failed rewrite retained its temporary memory file")
+	}
+}
